@@ -46,10 +46,10 @@ function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> 
   }
 }
 
-test("happy turn edits the file, checkpoints, and records the turn", async () => {
+test("happy turn edits the file in place and records the turn", async () => {
   h = await createHarness();
   const convId = await startConversation(h);
-  expect(h.gitOut(["branch"])).toContain(`pincer/${convId}`);
+  expect(h.gitOut(["branch"])).not.toContain("pincer/");
 
   h.send({
     v: V,
@@ -65,7 +65,7 @@ test("happy turn edits the file, checkpoints, and records the turn", async () =>
 
   const complete = await h.next("turn_complete");
   expect(complete.success).toBe(true);
-  expect(complete.checkpoint).not.toBeNull();
+  expect(complete.checkpoint).toBeNull();
 
   expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
   const record = h.readRecord();
@@ -73,59 +73,58 @@ test("happy turn edits the file, checkpoints, and records the turn", async () =>
   expect(record).toContain(h.userPrompt);
 
   const turn = lastTurnRow(h, convId);
-  expect(turn["checkpoint"]).toBe(complete.checkpoint);
+  expect(turn["checkpoint"]).toBeNull();
   expect(turn["agent_session_id"]).toBe("sess-1");
 });
 
-test("revert restores the file to the parent checkpoint", async () => {
+test("revert is unavailable in direct-edit mode", async () => {
   h = await createHarness();
   const convId = await startConversation(h);
   await runTurn(h, convId, h.userPrompt);
   expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 
   h.send({ v: V, type: "revert", conversationId: convId });
-  await h.next("reverted");
-  expect(h.readTarget()).not.toContain("PINCER_EDIT_MARKER");
+  const err = await h.next("error");
+  expect(err.message).toContain("direct-edit");
+  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 });
 
-test("accept merges the branch into base and deletes it", async () => {
+test("accept closes the conversation without touching git", async () => {
   h = await createHarness();
+  const headBefore = h.gitOut(["rev-parse", "HEAD"]).trim();
   const convId = await startConversation(h);
   await runTurn(h, convId, h.userPrompt);
   expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 
   h.send({ v: V, type: "accept", conversationId: convId });
   const accepted = await h.next("accepted");
-  expect(accepted.mergeCommit).toBeTruthy();
-  expect(h.gitOut(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
-  expect(h.gitOut(["branch"])).not.toContain(`pincer/${convId}`);
+  expect(accepted.conversationId).toBe(convId);
+  expect(h.gitOut(["branch"])).not.toContain("pincer/");
+  expect(h.gitOut(["rev-parse", "HEAD"]).trim()).toBe(headBefore);
   expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 });
 
-test("discard removes the branch and leaves base untouched", async () => {
+test("discard closes the conversation and leaves the working tree edit intact", async () => {
   h = await createHarness();
   const convId = await startConversation(h);
   await runTurn(h, convId, h.userPrompt);
+  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 
   h.send({ v: V, type: "discard", conversationId: convId });
   await h.next("discarded");
   expect(h.gitOut(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
-  expect(h.gitOut(["branch"])).not.toContain(`pincer/${convId}`);
-  expect(h.readTarget()).not.toContain("PINCER_EDIT_MARKER");
+  expect(h.gitOut(["branch"])).not.toContain("pincer/");
+  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 });
 
-test("dirty working tree blocks new_conversation until forced", async () => {
+test("new_conversation succeeds even with a dirty working tree", async () => {
   h = await createHarness();
   h.dirtyTarget();
 
   h.send({ v: V, type: "new_conversation" });
-  const blocked = await h.next("blocked");
-  expect(blocked.reason).toBe("dirty_working_tree");
-  expect(blocked.files).toContain("src/App.tsx");
-
-  h.send({ v: V, type: "new_conversation", force: true });
   const started = await h.next("conversation_started");
-  expect(started.conversation.branch).toContain("pincer/");
+  expect(started.conversation.id).toBeTruthy();
+  expect(started.conversation.branch).not.toContain("pincer/");
 });
 
 test("no detected agent yields welcome{agent:null} and blocks prompts", async () => {

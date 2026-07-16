@@ -46,7 +46,7 @@ function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> 
   }
 }
 
-test("omp happy turn edits the file, checkpoints, and captures the session id", async () => {
+test("omp happy turn edits the file in place and captures the session id", async () => {
   h = await createHarness({ agentId: "omp", agentCommand: ["bun", FAKE_OMP] });
   const convId = await startConversation(h);
 
@@ -62,7 +62,7 @@ test("omp happy turn edits the file, checkpoints, and captures the session id", 
 
   const complete = await h.next("turn_complete");
   expect(complete.success).toBe(true);
-  expect(complete.checkpoint).not.toBeNull();
+  expect(complete.checkpoint).toBeNull();
 
   expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 

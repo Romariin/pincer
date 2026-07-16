@@ -31,7 +31,7 @@ interface ActiveTurn {
 const NO_AGENT_HINT =
   "No supported coding agent detected. Install Claude Code (https://claude.com/claude-code) or configure one via pincer.config.json.";
 
-/** Composes git + store + agent into the branch-per-conversation, checkpoint-per-turn lifecycle. */
+/** Composes store + agent to run direct-edit turns: the agent edits the working tree in place (no branches, no checkpoints). */
 export class Orchestrator {
   private readonly git: Git;
   private readonly store: Store;
@@ -58,34 +58,18 @@ export class Orchestrator {
     return { v: PROTOCOL_VERSION, type: "conversations", items: this.store.listConversations() };
   }
 
-  async newConversation(force: boolean): Promise<ServerMessage> {
-    if (!force && (await this.git.isDirty())) {
-      return {
-        v: PROTOCOL_VERSION,
-        type: "blocked",
-        reason: "dirty_working_tree",
-        files: await this.git.dirtyFiles(),
-        message:
-          "Working tree has uncommitted changes. Commit or stash them, or resend with force to checkpoint them on the conversation branch.",
-      };
-    }
-
+  async newConversation(_force: boolean): Promise<ServerMessage> {
+    // Direct-edit mode: no pincer branch, no clean-tree gate. The agent edits
+    // the working tree in place on whatever branch is currently checked out.
     const id = crypto.randomUUID().slice(0, 8);
-    const branch = `pincer/${id}`;
-    const baseBranch = await this.git.currentBranch();
-    const baseCommit = await this.git.headSha();
-
-    await this.git.createBranch(branch);
-    if (force && (await this.git.isDirty())) {
-      await this.git.commitAll("pincer: baseline (uncommitted work)");
-    }
+    const branch = await this.git.currentBranch();
 
     const now = Date.now();
     this.store.createConversation({
       id,
       branch,
-      base_branch: baseBranch,
-      base_commit: baseCommit,
+      base_branch: branch,
+      base_commit: "",
       status: "active",
       agent_id: this.agentId ?? "none",
       created_at: now,
@@ -102,7 +86,6 @@ export class Orchestrator {
     const conv = this.store.getConversation(id);
     if (!conv) return this.unknownConversation();
 
-    await this.git.checkout(conv.branch);
     this.activeConversationId = id;
 
     const turns = this.store.getTurns(id).map(toTurnSummary);
@@ -135,15 +118,9 @@ export class Orchestrator {
       return;
     }
 
-    if ((await this.git.currentBranch()) !== conv.branch) {
-      await this.git.checkout(conv.branch);
-    }
-
+    // Direct-edit mode: no branch checkout; the agent edits the working tree in place.
     const seq = this.store.getTurns(conversationId).length + 1;
     const last = this.store.lastActiveTurn(conversationId);
-    // For turn 1 no commits exist on the branch yet, so HEAD is the branch tip at
-    // creation (= base_commit when clean, or the forced baseline commit when dirty+force).
-    const parent = last?.checkpoint ?? (await this.git.headSha());
     const resumeSessionId = last?.agent_session_id ?? null;
 
     const turnId = this.store.addTurn({
@@ -154,7 +131,7 @@ export class Orchestrator {
       dom_context: JSON.stringify(domContext),
       agent_session_id: null,
       checkpoint: null,
-      parent_checkpoint: parent,
+      parent_checkpoint: null,
       output: null,
       status: "running",
       created_at: Date.now(),
@@ -269,14 +246,11 @@ export class Orchestrator {
         return;
       }
 
-      const checkpoint = await this.git.commitAll(`pincer turn ${seq}: ${prompt.slice(0, 60)}`);
-      this.log(
-        `checkpoint created: ${checkpoint ?? "(no file changes)"} conversation=${conversationId} turn=${seq}`,
-      );
+      this.log(`turn complete conversation=${conversationId} turn=${seq}`);
       this.store.updateTurn(turnId, {
         agent_session_id: sessionId,
-        checkpoint,
-        parent_checkpoint: parent,
+        checkpoint: null,
+        parent_checkpoint: null,
         output: outputText,
         status: "complete",
       });
@@ -290,7 +264,7 @@ export class Orchestrator {
         type: "turn_complete",
         conversationId,
         turnId,
-        checkpoint,
+        checkpoint: null,
         success,
         summary,
       });
@@ -317,44 +291,24 @@ export class Orchestrator {
   async revert(conversationId: string): Promise<ServerMessage> {
     const conv = this.store.getConversation(conversationId);
     if (!conv) return this.unknownConversation();
-
-    const turn = this.store.lastActiveTurn(conversationId);
-    if (!turn || !turn.parent_checkpoint) {
-      return { v: PROTOCOL_VERSION, type: "error", message: "No turn to revert." };
-    }
-
-    await this.git.resetHard(turn.parent_checkpoint);
-    this.store.setTurnStatus(turn.id, "reverted");
-    this.store.touchConversation(conversationId);
-    return { v: PROTOCOL_VERSION, type: "reverted", conversationId, checkpoint: turn.parent_checkpoint };
+    return {
+      v: PROTOCOL_VERSION,
+      type: "error",
+      message: "Revert is unavailable in direct-edit mode; undo the file change with your editor or git.",
+    };
   }
 
   async accept(conversationId: string): Promise<ServerMessage> {
     const conv = this.store.getConversation(conversationId);
     if (!conv) return this.unknownConversation();
-
-    await this.git.checkout(conv.base_branch);
-    const res = await this.git.merge(conv.branch, `pincer: accept ${conv.id}`);
-    if (!res.ok) {
-      return {
-        v: PROTOCOL_VERSION,
-        type: "error",
-        code: "merge_conflict",
-        message: `Merge conflict accepting ${conv.branch}; branch left intact for manual resolution.`,
-      };
-    }
-    await this.git.deleteBranch(conv.branch, false);
     this.store.setConversationStatus(conversationId, "accepted");
     if (this.activeConversationId === conversationId) this.activeConversationId = null;
-    return { v: PROTOCOL_VERSION, type: "accepted", conversationId, mergeCommit: res.sha };
+    return { v: PROTOCOL_VERSION, type: "accepted", conversationId, mergeCommit: "" };
   }
 
   async discard(conversationId: string): Promise<ServerMessage> {
     const conv = this.store.getConversation(conversationId);
     if (!conv) return this.unknownConversation();
-
-    await this.git.checkout(conv.base_branch);
-    await this.git.deleteBranch(conv.branch, true);
     this.store.setConversationStatus(conversationId, "discarded");
     if (this.activeConversationId === conversationId) this.activeConversationId = null;
     return { v: PROTOCOL_VERSION, type: "discarded", conversationId };
