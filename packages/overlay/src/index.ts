@@ -47,6 +47,7 @@ function start(): void {
   let backoff = 500;
   const maxBackoff = 30000;
   let conversationId: string | null = null;
+  let pendingPrompt: { prompt: string; source: SourceLocation | null; domContext: DomContext } | null = null;
   let conversations: ConversationSummary[] = [];
   let agentMissing = false;
   let connected = false;
@@ -115,6 +116,17 @@ function start(): void {
         conversationId = msg.conversation.id;
         conversations = [msg.conversation, ...conversations];
         appendLog(`conversation started: ${msg.conversation.branch}`);
+        if (pendingPrompt) {
+          send({
+            v: PROTOCOL_VERSION,
+            type: "prompt",
+            conversationId,
+            prompt: pendingPrompt.prompt,
+            source: pendingPrompt.source,
+            domContext: pendingPrompt.domContext,
+          });
+          pendingPrompt = null;
+        }
         break;
       case "conversation_resumed":
         conversationId = msg.conversation.id;
@@ -122,6 +134,7 @@ function start(): void {
         break;
       case "blocked":
         appendLog(`blocked: ${msg.reason} — ${msg.message}`);
+        pendingPrompt = null;
         break;
       case "turn_started":
         appendLog(`turn ${msg.seq} started`);
@@ -316,20 +329,23 @@ function start(): void {
     const submitBtn = mkButton("Submit", () => {
       const promptText = textarea.value.trim();
       if (!promptText) return;
+      appendLog(`> ${promptText}`);
       if (!conversationId) {
+        // No conversation yet: create one, then send the prompt once the
+        // daemon confirms it via conversation_started (a prompt carrying an
+        // unregistered id is rejected as unknown_conversation).
+        pendingPrompt = { prompt: promptText, source, domContext };
         send({ v: PROTOCOL_VERSION, type: "new_conversation" });
+        return;
       }
-      // fire prompt; if conversation is being created lazily the daemon
-      // assigns/uses the active conversation. Include current known id.
       send({
         v: PROTOCOL_VERSION,
         type: "prompt",
-        conversationId: conversationId ?? "",
+        conversationId,
         prompt: promptText,
         source,
         domContext,
       });
-      appendLog(`> ${promptText}`);
     });
     const cancelBtn = mkButton("Cancel", () => {
       if (conversationId) send({ v: PROTOCOL_VERSION, type: "cancel", conversationId });
