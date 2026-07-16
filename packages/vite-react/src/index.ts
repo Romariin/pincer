@@ -1,0 +1,107 @@
+import * as babel from "@babel/core";
+import type { Plugin } from "vite";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { DEFAULT_PORT, CONTRACT_A_VERSION } from "@pincer/core";
+import { pincerBabel } from "./babelPlugin";
+
+export { pincerBabel } from "./babelPlugin";
+
+/**
+ * Vite plugin (dev-only) that tags host JSX elements with Contract A source
+ * attributes, injects the Pincer overlay config + loader, and serves the built
+ * overlay bundle at `/__pincer/overlay.js`.
+ *
+ * Tagging runs in an `enforce: "pre"` transform hook so it lands before
+ * `@vitejs/plugin-react`'s JSX transform (which would otherwise collapse the
+ * JSX element before a shared-pass `JSXOpeningElement` visitor could tag it).
+ * JSX/TS is preserved for the downstream React transform.
+ */
+export default function pincer(options?: { daemonUrl?: string; toggleKey?: string }): Plugin {
+  let projectRoot = process.cwd();
+
+  return {
+    name: "pincer",
+    apply: "serve",
+    enforce: "pre",
+
+    configResolved(c) {
+      projectRoot = c.root;
+    },
+
+    transform(code, id) {
+      if (id.includes("/node_modules/") || id.startsWith("\0")) return null;
+      const clean = id.split("?")[0] ?? id;
+      if (!/\.[jt]sx$/.test(clean)) return null;
+
+      const result = babel.transformSync(code, {
+        filename: clean,
+        root: projectRoot,
+        plugins: [pincerBabel({ root: projectRoot })],
+        parserOpts: { plugins: ["jsx", "typescript"] },
+        sourceMaps: true,
+        babelrc: false,
+        configFile: false,
+      });
+      if (!result?.code) return null;
+      return { code: result.code, map: result.map ?? null };
+    },
+
+    configureServer(server) {
+      // Resolve the package location once (package.json always exists), but read
+      // the built bundle fresh on each request so a rebuild is picked up without
+      // restarting Vite, and never cached by the browser.
+      let overlayPath: string | null = null;
+      try {
+        const pkgJson = fileURLToPath(import.meta.resolve("@pincer/overlay/package.json"));
+        overlayPath = join(dirname(pkgJson), "dist/overlay.js");
+      } catch {
+        server.config.logger.warn(
+          "[pincer] cannot resolve @pincer/overlay — run `bun run build:overlay`.",
+        );
+      }
+
+      server.middlewares.use("/__pincer/overlay.js", (_req, res) => {
+        res.setHeader("content-type", "text/javascript");
+        res.setHeader("cache-control", "no-store");
+        let bundle: Buffer | null = null;
+        if (overlayPath) {
+          try {
+            bundle = readFileSync(overlayPath);
+          } catch {
+            bundle = null;
+          }
+        }
+        if (!bundle) {
+          res.statusCode = 503;
+          res.end("// pincer overlay not built — run `bun run build:overlay`");
+          return;
+        }
+        res.end(bundle);
+      });
+    },
+
+    transformIndexHtml() {
+      return [
+        {
+          tag: "script",
+          children:
+            "window.__PINCER__=" +
+            JSON.stringify({
+              wsUrl: options?.daemonUrl ?? "ws://127.0.0.1:" + DEFAULT_PORT,
+              contractAVersion: CONTRACT_A_VERSION,
+              projectRoot,
+              toggleKey: options?.toggleKey ?? "Alt+P",
+            }),
+          injectTo: "head" as const,
+        },
+        {
+          tag: "script",
+          attrs: { type: "module", src: "/__pincer/overlay.js" },
+          injectTo: "body" as const,
+        },
+      ];
+    },
+  };
+}

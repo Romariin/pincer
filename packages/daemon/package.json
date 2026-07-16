@@ -1,0 +1,14 @@
+{
+  "name": "@pincer/daemon",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "pincer": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@pincer/core": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun build ./src/cli.ts --compile --outfile ../../dist/pincer"
+  }
+}

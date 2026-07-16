@@ -1,0 +1,21 @@
+{
+  "name": "@pincer/vite-react",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@pincer/core": "workspace:*",
+    "@babel/core": "^7.28.0",
+    "@pincer/overlay": "workspace:*"
+  },
+  "peerDependencies": {
+    "vite": ">=5"
+  },
+  "devDependencies": {
+    "@types/babel__core": "^7",
+    "@types/node": "^22",
+    "vite": "^8.1.5"
+  }
+}

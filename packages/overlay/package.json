@@ -1,0 +1,11 @@
+{
+  "name": "@pincer/overlay",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@pincer/core": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --outfile ./dist/overlay.js --target browser --format esm --minify"
+  }
+}
