@@ -1,9 +1,25 @@
-import type { AgentAdapter, AgentEvent } from "@pincer/core";
+import type { AgentAdapter, AgentEvent, HarnessInfo } from "@pincer/core";
 import { composePrompt } from "./prompt";
+
+const info: HarnessInfo = {
+  id: "claude-code",
+  label: "Claude Code",
+  glyph: ">_",
+  c1: "#d98a63",
+  c2: "#c26a3f",
+  models: [
+    { id: "sonnet", label: "Sonnet" },
+    { id: "opus", label: "Opus" },
+    { id: "haiku", label: "Haiku" },
+  ],
+  defaultModel: "sonnet",
+  supportsEffort: false, // Claude Code has no reasoning-level flag
+};
 
 /** Contract B adapter for Anthropic's Claude Code CLI. */
 export const claudeAdapter: AgentAdapter = {
   id: "claude-code",
+  info,
   defaultCommand: ["claude"],
 
   async detect(command: string[]): Promise<boolean> {
@@ -14,8 +30,7 @@ export const claudeAdapter: AgentAdapter = {
         stderr: "ignore",
         stdin: "ignore",
       });
-      const code = await proc.exited;
-      return code === 0;
+      return (await proc.exited) === 0;
     } catch {
       return false;
     }
@@ -32,6 +47,7 @@ export const claudeAdapter: AgentAdapter = {
       "--include-partial-messages",
       "--permission-mode",
       "acceptEdits",
+      ...(task.model ? ["--model", task.model] : []),
       ...(task.resumeSessionId ? ["--resume", task.resumeSessionId] : []),
     ];
     return { argv };
@@ -69,7 +85,9 @@ export const claudeAdapter: AgentAdapter = {
       if (event["type"] === "content_block_start") {
         const block = event["content_block"] as Record<string, unknown> | undefined;
         if (block && block["type"] === "tool_use") {
-          return { kind: "tool", name: String(block["name"] ?? "tool") };
+          const input = block["input"] as Record<string, unknown> | undefined;
+          const detail = input && typeof input["file_path"] === "string" ? (input["file_path"] as string) : undefined;
+          return { kind: "tool", name: String(block["name"] ?? "tool"), detail };
         }
       }
       return null;

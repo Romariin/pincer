@@ -1,14 +1,20 @@
 import {
   PROTOCOL_VERSION,
+  DEFAULT_EFFORT,
   type AgentTask,
+  type ConversationConfig,
   type ConversationSummary,
+  type DiffHunk,
   type DomContext,
+  type HarnessAvailability,
+  type MessageBlock,
+  type PromptElement,
   type ServerMessage,
   type SourceLocation,
   type TurnSummary,
 } from "@pincer/core";
 import type { Git } from "./git";
-import type { ResolvedAgent } from "./agents/registry";
+import type { ResolvedHarness } from "./agents/registry";
 import type { ConversationRow, Store, TurnRow } from "./store";
 
 export type Emit = (msg: ServerMessage) => void;
@@ -17,7 +23,7 @@ export interface OrchestratorDeps {
   git: Git;
   store: Store;
   projectRoot: string;
-  agent: ResolvedAgent | null;
+  harnesses: ResolvedHarness[];
   log?: (msg: string) => void;
 }
 
@@ -29,14 +35,16 @@ interface ActiveTurn {
 }
 
 const NO_AGENT_HINT =
-  "No supported coding agent detected. Install Claude Code (https://claude.com/claude-code) or configure one via pincer.config.json.";
+  "No coding harness detected. Install Claude Code, Codex, or OMP, or configure one via pincer.config.json.";
+const MAX_DIFF_FILES = 8;
+const MAX_DIFF_LINES = 240;
 
-/** Composes store + agent to run direct-edit turns: the agent edits the working tree in place (no branches, no checkpoints). */
+/** Composes store + harnesses to run direct-edit turns: the chosen harness edits the working tree in place. */
 export class Orchestrator {
   private readonly git: Git;
   private readonly store: Store;
   private readonly projectRoot: string;
-  private readonly agent: ResolvedAgent | null;
+  private readonly harnesses: ResolvedHarness[];
   private readonly log: (msg: string) => void;
 
   private activeConversationId: string | null = null;
@@ -46,23 +54,46 @@ export class Orchestrator {
     this.git = deps.git;
     this.store = deps.store;
     this.projectRoot = deps.projectRoot;
-    this.agent = deps.agent;
+    this.harnesses = deps.harnesses;
     this.log = deps.log ?? (() => {});
   }
 
+  /** Default harness id for new conversations (first detected), or null. */
+  get defaultHarnessId(): string | null {
+    return this.harnesses.find((h) => h.detected)?.adapter.id ?? null;
+  }
+
+  /** Back-compat alias used by the CLI banner. */
   get agentId(): string | null {
-    return this.agent?.adapter.id ?? null;
+    return this.defaultHarnessId;
+  }
+
+  harnessAvailability(): HarnessAvailability[] {
+    return this.harnesses.map((h) => ({ ...h.adapter.info, detected: h.detected }));
+  }
+
+  private harnessFor(id: string): ResolvedHarness | undefined {
+    return (
+      this.harnesses.find((h) => h.adapter.id === id) ??
+      this.harnesses.find((h) => h.adapter.id === this.defaultHarnessId) ??
+      this.harnesses.find((h) => h.detected)
+    );
   }
 
   listConversations(): ServerMessage {
     return { v: PROTOCOL_VERSION, type: "conversations", items: this.store.listConversations() };
   }
 
-  async newConversation(_force: boolean): Promise<ServerMessage> {
-    // Direct-edit mode: no pincer branch, no clean-tree gate. The agent edits
-    // the working tree in place on whatever branch is currently checked out.
+  async newConversation(config: ConversationConfig): Promise<ServerMessage> {
+    // Direct-edit mode: no pincer branch, no clean-tree gate. The chosen harness
+    // edits the working tree in place on whatever branch is currently checked out.
     const id = crypto.randomUUID().slice(0, 8);
     const branch = await this.git.currentBranch();
+
+    const harness = this.harnessFor(config.harnessId ?? this.defaultHarnessId ?? "");
+    const harnessId = config.harnessId ?? harness?.adapter.id ?? this.defaultHarnessId ?? "";
+    const model = config.model ?? harness?.adapter.info.defaultModel ?? "";
+    const effort = config.effort ?? DEFAULT_EFFORT;
 
     const now = Date.now();
     this.store.createConversation({
@@ -71,7 +102,10 @@ export class Orchestrator {
       base_branch: branch,
       base_commit: "",
       status: "active",
-      agent_id: this.agentId ?? "none",
+      agent_id: harnessId || "none",
+      harness_id: harnessId,
+      model,
+      effort,
       created_at: now,
       updated_at: now,
     });
@@ -85,11 +119,29 @@ export class Orchestrator {
   async resumeConversation(id: string): Promise<ServerMessage> {
     const conv = this.store.getConversation(id);
     if (!conv) return this.unknownConversation();
-
     this.activeConversationId = id;
-
     const turns = this.store.getTurns(id).map(toTurnSummary);
     return { v: PROTOCOL_VERSION, type: "conversation_resumed", conversation: this.toSummary(conv), turns };
+  }
+
+  setConfig(conversationId: string, config: ConversationConfig): ServerMessage {
+    const conv = this.store.getConversation(conversationId);
+    if (!conv) return this.unknownConversation();
+    const patch: { harness_id?: string; model?: string; effort?: string } = {};
+    if (config.harnessId !== undefined) patch.harness_id = config.harnessId;
+    if (config.model !== undefined) patch.model = config.model;
+    if (config.effort !== undefined) patch.effort = config.effort;
+    this.store.setConversationConfig(conversationId, patch);
+    const row = this.store.getConversation(conversationId);
+    return { v: PROTOCOL_VERSION, type: "config_updated", conversation: this.toSummary(row!) };
+  }
+
+  deleteConversation(conversationId: string): ServerMessage {
+    const conv = this.store.getConversation(conversationId);
+    if (!conv) return this.unknownConversation();
+    this.store.deleteConversation(conversationId);
+    if (this.activeConversationId === conversationId) this.activeConversationId = null;
+    return { v: PROTOCOL_VERSION, type: "deleted", conversationId };
   }
 
   async runTurn(
@@ -97,6 +149,7 @@ export class Orchestrator {
     prompt: string,
     source: SourceLocation | null,
     domContext: DomContext,
+    elements: PromptElement[],
     emit: Emit,
   ): Promise<void> {
     const conv = this.store.getConversation(conversationId);
@@ -113,12 +166,16 @@ export class Orchestrator {
       });
       return;
     }
-    if (!this.agent) {
+    const harness = this.harnessFor(conv.harness_id);
+    if (!harness || !harness.detected) {
       emit({ v: PROTOCOL_VERSION, type: "blocked", reason: "no_agent", message: NO_AGENT_HINT });
       return;
     }
 
-    // Direct-edit mode: no branch checkout; the agent edits the working tree in place.
+    // Snapshot the tree before emitting turn_started so the only await stays
+    // ahead of activeTurn being set (else a fast cancel would race and miss).
+    const beforeDiff = await this.snapshotDiff();
+
     const seq = this.store.getTurns(conversationId).length + 1;
     const last = this.store.lastActiveTurn(conversationId);
     const resumeSessionId = last?.agent_session_id ?? null;
@@ -133,6 +190,7 @@ export class Orchestrator {
       checkpoint: null,
       parent_checkpoint: null,
       output: null,
+      blocks: null,
       status: "running",
       created_at: Date.now(),
     });
@@ -142,17 +200,23 @@ export class Orchestrator {
       prompt,
       source,
       domContext,
+      elements,
       projectRoot: this.projectRoot,
       conversationId,
       resumeSessionId,
+      model: conv.model || null,
+      effort: conv.effort || null,
     };
-    const inv = this.agent.adapter.invocation(task, this.agent.command);
-    this.log(`task sent: agent=${this.agent.adapter.id} conversation=${conversationId} turn=${seq}`);
+    const inv = harness.adapter.invocation(task, harness.command);
+    this.log(
+      `task sent: harness=${harness.adapter.id} model=${conv.model || "default"} effort=${conv.effort} conversation=${conversationId} turn=${seq}`,
+    );
 
     let outputText = "";
     let sessionId: string | null = null;
     let resultSuccess = false;
     let sawResult = false;
+    const blocks: MessageBlock[] = [];
 
     try {
       const proc = Bun.spawn(inv.argv, {
@@ -185,10 +249,16 @@ export class Orchestrator {
 
       let buffer = "";
       const consume = (line: string): void => {
-        const event = this.agent!.adapter.parseLine(line);
+        const event = harness.adapter.parseLine(line);
         if (!event) return;
         emit({ v: PROTOCOL_VERSION, type: "agent_output", conversationId, turnId, event });
-        if (event.kind === "text") outputText += event.text;
+        if (event.kind === "text") {
+          outputText += event.text;
+          const tail = blocks[blocks.length - 1];
+          if (tail && tail.t === "md") tail.text += event.text;
+          else blocks.push({ t: "md", text: event.text });
+        }
+        if (event.kind === "tool") blocks.push({ t: "tool", name: event.name, detail: event.detail });
         if (event.kind === "status" && event.sessionId) sessionId = event.sessionId;
         if (event.kind === "result") {
           sawResult = true;
@@ -246,12 +316,19 @@ export class Orchestrator {
         return;
       }
 
+      // Stream real diffs of what the harness changed in the working tree.
+      for (const d of await this.collectDiffs(beforeDiff)) {
+        emit({ v: PROTOCOL_VERSION, type: "agent_output", conversationId, turnId, event: d });
+        blocks.push({ t: "diff", file: d.file, hunks: d.hunks });
+      }
+
       this.log(`turn complete conversation=${conversationId} turn=${seq}`);
       this.store.updateTurn(turnId, {
         agent_session_id: sessionId,
         checkpoint: null,
         parent_checkpoint: null,
         output: outputText,
+        blocks: JSON.stringify(blocks),
         status: "complete",
       });
       this.store.touchConversation(conversationId);
@@ -279,6 +356,28 @@ export class Orchestrator {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  private async snapshotDiff(): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    try {
+      for (const b of parseUnifiedDiff(await this.git.rawDiff())) map.set(b.file, JSON.stringify(b.hunks));
+    } catch {
+      /* no git diff available */
+    }
+    return map;
+  }
+
+  private async collectDiffs(before: Map<string, string>): Promise<AgentEventLite[]> {
+    let raw: string;
+    try {
+      raw = await this.git.rawDiff();
+    } catch {
+      return [];
+    }
+    return parseUnifiedDiff(raw)
+      .filter((b) => before.get(b.file) !== JSON.stringify(b.hunks))
+      .slice(0, MAX_DIFF_FILES);
   }
 
   cancel(conversationId: string): void {
@@ -315,6 +414,7 @@ export class Orchestrator {
   }
 
   private toSummary(row: ConversationRow): ConversationSummary {
+    const turns = this.store.getTurns(row.id);
     return {
       id: row.id,
       branch: row.branch,
@@ -322,7 +422,11 @@ export class Orchestrator {
       agentId: row.agent_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      turnCount: this.store.getTurns(row.id).length,
+      turnCount: turns.length,
+      title: turns[0]?.prompt ?? null,
+      harnessId: row.harness_id,
+      model: row.model,
+      effort: row.effort,
     };
   }
 
@@ -336,7 +440,54 @@ export class Orchestrator {
   }
 }
 
+type AgentEventLite = { kind: "diff"; file: string; hunks: DiffHunk[] };
+
+/** Parse `git diff --no-color` into per-file hunk blocks for streaming. */
+function parseUnifiedDiff(raw: string): { kind: "diff"; file: string; hunks: DiffHunk[] }[] {
+  if (!raw.trim()) return [];
+  const files: { kind: "diff"; file: string; hunks: DiffHunk[] }[] = [];
+  let cur: { kind: "diff"; file: string; hunks: DiffHunk[] } | null = null;
+  let inHunk = false;
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("diff --git")) {
+      cur = { kind: "diff", file: "", hunks: [] };
+      files.push(cur);
+      inHunk = false;
+      continue;
+    }
+    if (!cur) continue;
+    if (line.startsWith("+++ b/")) {
+      cur.file = line.slice(6);
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      cur.file = line.slice(4).replace(/^b\//, "");
+      continue;
+    }
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (cur.hunks.length >= MAX_DIFF_LINES) continue;
+    if (line.startsWith("+") && !line.startsWith("+++")) cur.hunks.push({ type: "add", text: line.slice(1) });
+    else if (line.startsWith("-") && !line.startsWith("---")) cur.hunks.push({ type: "del", text: line.slice(1) });
+    else if (line.startsWith(" ")) cur.hunks.push({ type: "ctx", text: line.slice(1) });
+  }
+  return files.filter((f) => f.file && f.hunks.length > 0);
+}
+
 function toTurnSummary(row: TurnRow): TurnSummary {
+  let blocks: MessageBlock[] = [];
+  if (row.blocks) {
+    try {
+      const parsed: unknown = JSON.parse(row.blocks);
+      if (Array.isArray(parsed)) blocks = parsed as MessageBlock[];
+    } catch {
+      /* corrupt/legacy blocks; fall back to text */
+    }
+  }
+  if (blocks.length === 0 && row.output) blocks = [{ t: "md", text: row.output }];
   return {
     id: row.id,
     seq: row.seq,
@@ -344,5 +495,7 @@ function toTurnSummary(row: TurnRow): TurnSummary {
     checkpoint: row.checkpoint,
     status: row.status,
     createdAt: row.created_at,
+    output: row.output ?? "",
+    blocks,
   };
 }

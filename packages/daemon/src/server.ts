@@ -1,14 +1,17 @@
 import type { Server, ServerWebSocket } from "bun";
 import {
   PROTOCOL_VERSION,
+  EFFORTS,
   type ClientMessage,
+  type ConversationConfig,
   type DomContext,
+  type PromptElement,
   type ServerMessage,
   type SourceLocation,
 } from "@pincer/core";
 import { Git } from "./git";
 import { Store } from "./store";
-import { resolveAgent } from "./agents/registry";
+import { resolveHarnesses } from "./agents/registry";
 import { Orchestrator, type Emit } from "./orchestrator";
 
 const DAEMON_VERSION = "0.1.0";
@@ -35,9 +38,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     throw new Error(`Not a git repository: ${opts.projectRoot}. Pincer requires a git repo.`);
   }
 
-  const resolved = await resolveAgent({ agentId: opts.agentId, command: opts.agentCommand });
+  const harnesses = await resolveHarnesses({ agentId: opts.agentId, command: opts.agentCommand });
   const store = new Store(opts.projectRoot);
-  const orchestrator = new Orchestrator({ git, store, projectRoot: opts.projectRoot, agent: resolved, log });
+  const orchestrator = new Orchestrator({ git, store, projectRoot: opts.projectRoot, harnesses, log });
 
   const welcome: ServerMessage = {
     v: PROTOCOL_VERSION,
@@ -45,7 +48,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     daemonVersion: DAEMON_VERSION,
     protocolVersion: PROTOCOL_VERSION,
     projectRoot: opts.projectRoot,
-    agent: resolved ? { id: resolved.adapter.id, detected: true } : null,
+    harnesses: orchestrator.harnessAvailability(),
+    efforts: [...EFFORTS],
+    defaultHarnessId: orchestrator.defaultHarnessId,
   };
 
   const server = Bun.serve({
@@ -86,6 +91,14 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   };
 }
 
+function readConfig(msg: Record<string, unknown>): ConversationConfig {
+  const c: ConversationConfig = {};
+  if (typeof msg["harnessId"] === "string") c.harnessId = msg["harnessId"];
+  if (typeof msg["model"] === "string") c.model = msg["model"];
+  if (typeof msg["effort"] === "string") c.effort = msg["effort"];
+  return c;
+}
+
 async function dispatch(orch: Orchestrator, raw: unknown, emit: Emit): Promise<void> {
   if (raw === null || typeof raw !== "object") {
     emit({ v: PROTOCOL_VERSION, type: "error", code: "bad_message", message: "Expected an object." });
@@ -98,10 +111,16 @@ async function dispatch(orch: Orchestrator, raw: unknown, emit: Emit): Promise<v
       emit(orch.listConversations());
       return;
     case "new_conversation":
-      emit(await orch.newConversation(msg.force === true));
+      emit(await orch.newConversation(readConfig(msg)));
       return;
     case "resume_conversation":
       emit(await orch.resumeConversation(String(msg.conversationId)));
+      return;
+    case "set_config":
+      emit(orch.setConfig(String(msg.conversationId), readConfig(msg)));
+      return;
+    case "delete_conversation":
+      emit(orch.deleteConversation(String(msg.conversationId)));
       return;
     case "prompt": {
       const domContext = (msg.domContext as DomContext | undefined) ?? {
@@ -111,6 +130,7 @@ async function dispatch(orch: Orchestrator, raw: unknown, emit: Emit): Promise<v
         text: null,
         ancestry: [],
       };
+      const elements = Array.isArray(msg.elements) ? (msg.elements as PromptElement[]) : [];
       // Fire-and-forget: runTurn streams via `emit` and owns its own errors.
       // Awaiting it here would block this connection's message loop, so a
       // subsequent `cancel` frame could never interrupt the running turn.
@@ -119,6 +139,7 @@ async function dispatch(orch: Orchestrator, raw: unknown, emit: Emit): Promise<v
         String(msg.prompt ?? ""),
         (msg.source as SourceLocation | null) ?? null,
         domContext,
+        elements,
         emit,
       );
       return;

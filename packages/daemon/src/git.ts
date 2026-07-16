@@ -50,6 +50,12 @@ export class Git {
       .map((l) => l.slice(3));
   }
 
+  /** Unified working-tree diff (vs HEAD), optionally limited to `paths`. */
+  async rawDiff(paths: string[] = []): Promise<string> {
+    const r = await this.run(["diff", "--no-color", ...(paths.length ? ["--", ...paths] : [])]);
+    return r.code === 0 ? r.stdout : "";
+  }
+
   async currentBranch(): Promise<string> {
     const r = await this.runOk(["rev-parse", "--abbrev-ref", "HEAD"]);
     return r.stdout.trim();

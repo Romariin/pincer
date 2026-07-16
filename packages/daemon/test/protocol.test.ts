@@ -127,10 +127,10 @@ test("new_conversation succeeds even with a dirty working tree", async () => {
   expect(started.conversation.branch).not.toContain("pincer/");
 });
 
-test("no detected agent yields welcome{agent:null} and blocks prompts", async () => {
+test("no detected agent yields welcome{defaultHarnessId:null} and blocks prompts", async () => {
   h = await createHarness({ agentCommand: ["definitely-not-a-binary-xyz"], agentId: "claude-code" });
   const welcome = await h.next("welcome");
-  expect(welcome.agent).toBeNull();
+  expect(welcome.defaultHarnessId).toBeNull();
 
   const convId = await startConversation(h);
   h.send({ v: V, type: "prompt", conversationId: convId, prompt: "x", source: null, domContext: h.domContext });

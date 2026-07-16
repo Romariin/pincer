@@ -66,7 +66,8 @@ test("omp happy turn edits the file in place and captures the session id", async
 
   expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
 
-  const argv = (JSON.parse(h.readRecord()) as { argv: string[] }).argv;
+  const record = JSON.parse(h.readRecord()) as { argv: string[] };
+  const argv = record.argv;
   expect(argv).toContain("-p");
   expect(argv).toContain("--mode");
   expect(argv).toContain("json");
@@ -88,7 +89,8 @@ test("omp resume uses -r with the captured session id on the second turn", async
   await runTurn(h, convId, "first change");
   await runTurn(h, convId, "second change");
 
-  const argv = (JSON.parse(h.readRecord()) as { argv: string[] }).argv;
+  const record2 = JSON.parse(h.readRecord()) as { argv: string[] };
+  const argv = record2.argv;
   expect(argv).toContain("-r");
   expect(argv).toContain("omp-sess-1");
 });

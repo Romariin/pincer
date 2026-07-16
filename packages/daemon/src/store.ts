@@ -10,6 +10,9 @@ export interface ConversationRow {
   base_commit: string;
   status: string;
   agent_id: string;
+  harness_id: string;
+  model: string;
+  effort: string;
   created_at: number;
   updated_at: number;
 }
@@ -25,13 +28,14 @@ export interface TurnRow {
   checkpoint: string | null;
   parent_checkpoint: string | null;
   output: string | null;
+  blocks: string | null;
   status: string;
   created_at: number;
 }
 
 export type NewTurnRow = Omit<TurnRow, "id">;
 export type TurnPatch = Partial<
-  Pick<TurnRow, "agent_session_id" | "checkpoint" | "parent_checkpoint" | "output" | "status">
+  Pick<TurnRow, "agent_session_id" | "checkpoint" | "parent_checkpoint" | "output" | "blocks" | "status">
 >;
 
 const SCHEMA = `
@@ -42,6 +46,9 @@ CREATE TABLE IF NOT EXISTS conversations (
   base_commit TEXT NOT NULL,
   status TEXT NOT NULL,
   agent_id TEXT NOT NULL,
+  harness_id TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  effort TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -56,6 +63,7 @@ CREATE TABLE IF NOT EXISTS turns (
   checkpoint TEXT,
   parent_checkpoint TEXT,
   output TEXT,
+  blocks TEXT,
   status TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
@@ -75,6 +83,18 @@ export class Store {
     this.db = new Database(join(dir, "history.db"));
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec(SCHEMA);
+    for (const col of ["harness_id", "model", "effort"]) {
+      try {
+        this.db.exec(`ALTER TABLE conversations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+      } catch {
+        /* column already present */
+      }
+    }
+    try {
+      this.db.exec("ALTER TABLE turns ADD COLUMN blocks TEXT");
+    } catch {
+      /* column already present */
+    }
     this.db.query("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run();
   }
 
@@ -86,8 +106,8 @@ export class Store {
     this.db
       .query(
         `INSERT INTO conversations
-          (id, branch, base_branch, base_commit, status, agent_id, created_at, updated_at)
-         VALUES ($id, $branch, $base_branch, $base_commit, $status, $agent_id, $created_at, $updated_at)`,
+          (id, branch, base_branch, base_commit, status, agent_id, harness_id, model, effort, created_at, updated_at)
+         VALUES ($id, $branch, $base_branch, $base_commit, $status, $agent_id, $harness_id, $model, $effort, $created_at, $updated_at)`,
       )
       .run({
         $id: row.id,
@@ -96,6 +116,9 @@ export class Store {
         $base_commit: row.base_commit,
         $status: row.status,
         $agent_id: row.agent_id,
+        $harness_id: row.harness_id,
+        $model: row.model,
+        $effort: row.effort,
         $created_at: row.created_at,
         $updated_at: row.updated_at,
       });
@@ -105,6 +128,20 @@ export class Store {
     return this.db
       .query("SELECT * FROM conversations WHERE id = $id")
       .get({ $id: id }) as ConversationRow | null;
+  }
+
+  setConversationConfig(id: string, patch: { harness_id?: string; model?: string; effort?: string }): void {
+    const cols = Object.keys(patch) as (keyof typeof patch)[];
+    if (cols.length === 0) return;
+    const sets = cols.map((c) => `${c} = $${c}`).join(", ");
+    const params: Record<string, string | number> = { $id: id, $now: Date.now() };
+    for (const c of cols) params[`$${c}`] = patch[c] ?? "";
+    this.db.query(`UPDATE conversations SET ${sets}, updated_at = $now WHERE id = $id`).run(params);
+  }
+
+  deleteConversation(id: string): void {
+    this.db.query("DELETE FROM turns WHERE conversation_id = $id").run({ $id: id });
+    this.db.query("DELETE FROM conversations WHERE id = $id").run({ $id: id });
   }
 
   listConversations(): ConversationSummary[] {
@@ -117,7 +154,11 @@ export class Store {
            c.agent_id AS agentId,
            c.created_at AS createdAt,
            c.updated_at AS updatedAt,
-           (SELECT COUNT(*) FROM turns t WHERE t.conversation_id = c.id) AS turnCount
+           c.harness_id AS harnessId,
+           c.model AS model,
+           c.effort AS effort,
+           (SELECT COUNT(*) FROM turns t WHERE t.conversation_id = c.id) AS turnCount,
+           (SELECT prompt FROM turns t WHERE t.conversation_id = c.id ORDER BY seq ASC LIMIT 1) AS title
          FROM conversations c
          ORDER BY c.updated_at DESC`,
       )
@@ -141,10 +182,10 @@ export class Store {
       .query(
         `INSERT INTO turns
           (conversation_id, seq, prompt, source, dom_context, agent_session_id,
-           checkpoint, parent_checkpoint, output, status, created_at)
+           checkpoint, parent_checkpoint, output, blocks, status, created_at)
          VALUES
           ($conversation_id, $seq, $prompt, $source, $dom_context, $agent_session_id,
-           $checkpoint, $parent_checkpoint, $output, $status, $created_at)`,
+           $checkpoint, $parent_checkpoint, $output, $blocks, $status, $created_at)`,
       )
       .run({
         $conversation_id: row.conversation_id,
@@ -156,6 +197,7 @@ export class Store {
         $checkpoint: row.checkpoint,
         $parent_checkpoint: row.parent_checkpoint,
         $output: row.output,
+        $blocks: row.blocks,
         $status: row.status,
         $created_at: row.created_at,
       });

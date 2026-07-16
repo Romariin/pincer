@@ -1,37 +1,44 @@
 import type { AgentAdapter } from "@pincer/core";
 import { claudeAdapter } from "./claude";
 import { ompAdapter } from "./omp";
+import { codexAdapter } from "./codex";
 
-/** Adapters ordered by auto-detect priority (Claude first). */
-const ADAPTERS: AgentAdapter[] = [claudeAdapter, ompAdapter];
+/** All harnesses the daemon knows, in default-selection priority order. */
+export const ADAPTERS: AgentAdapter[] = [claudeAdapter, ompAdapter, codexAdapter];
+
+export function harnessById(id: string): AgentAdapter | undefined {
+  return ADAPTERS.find((a) => a.id === id);
+}
 
 export interface AgentConfig {
-  /** Force a specific adapter id; error if unknown. */
+  /** Force a single harness by id; error if unknown. */
   agentId?: string;
-  /** Overridable base argv for the agent CLI (default: the selected adapter's `defaultCommand`). */
+  /** Overridable base argv for the forced harness (default: its `defaultCommand`). */
   command?: string[];
 }
 
-export interface ResolvedAgent {
+export interface ResolvedHarness {
   adapter: AgentAdapter;
   command: string[];
+  detected: boolean;
 }
 
 /**
- * Resolve the agent to use. Returns null when the requested/auto-detected CLI
- * is not installed (story 13 → welcome{agent:null}).
+ * Detect every available harness. With `agentId` set the daemon is restricted
+ * to that one harness (and `command` overrides its argv); otherwise all
+ * harnesses are probed and offered.
  */
-export async function resolveAgent(config: AgentConfig): Promise<ResolvedAgent | null> {
-  if (config.agentId) {
-    const adapter = ADAPTERS.find((a) => a.id === config.agentId);
-    if (!adapter) throw new Error(`Unknown agent id: ${config.agentId}`);
-    const command = config.command ?? adapter.defaultCommand;
-    return (await adapter.detect(command)) ? { adapter, command } : null;
+export async function resolveHarnesses(config: AgentConfig): Promise<ResolvedHarness[]> {
+  if (config.agentId && !harnessById(config.agentId)) {
+    throw new Error(`Unknown agent id: ${config.agentId}`);
   }
-
-  for (const adapter of ADAPTERS) {
-    const command = config.command ?? adapter.defaultCommand;
-    if (await adapter.detect(command)) return { adapter, command };
-  }
-  return null;
+  const list = config.agentId ? ADAPTERS.filter((a) => a.id === config.agentId) : ADAPTERS;
+  return Promise.all(
+    list.map(async (adapter) => {
+      const command =
+        config.agentId === adapter.id && config.command ? config.command : adapter.defaultCommand;
+      const detected = await adapter.detect(command);
+      return { adapter, command, detected };
+    }),
+  );
 }
