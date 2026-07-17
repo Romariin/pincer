@@ -2,7 +2,7 @@ import * as babel from "@babel/core";
 import type { Plugin } from "vite";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DEFAULT_PORT, CONTRACT_A_VERSION } from "@pincer/core";
 import { pincerBabel } from "./babelPlugin";
 
@@ -80,6 +80,22 @@ export default function pincer(options?: { daemonUrl?: string; toggleKey?: strin
         }
         res.end(bundle);
       });
+
+      // In dev the overlay is built by a separate `bun build --watch`. Watch the
+      // emitted bundle and force a browser reload when it changes so overlay
+      // edits hot-reload alongside app HMR. `.add()` bypasses Vite's default
+      // node_modules ignore; chokidar follows the workspace symlink to the real
+      // dist file.
+      if (overlayPath) {
+        const overlayFile = overlayPath;
+        server.watcher.add(overlayFile);
+        server.watcher.on("change", (file) => {
+          if (resolve(file) === resolve(overlayFile)) {
+            server.config.logger.info("[pincer] overlay changed — reloading");
+            server.ws.send({ type: "full-reload" });
+          }
+        });
+      }
     },
 
     transformIndexHtml() {
@@ -92,7 +108,7 @@ export default function pincer(options?: { daemonUrl?: string; toggleKey?: strin
               wsUrl: options?.daemonUrl ?? "ws://127.0.0.1:" + DEFAULT_PORT,
               contractAVersion: CONTRACT_A_VERSION,
               projectRoot,
-              toggleKey: options?.toggleKey ?? "Alt+P",
+              toggleKey: options?.toggleKey ?? "Alt+Shift+P",
             }),
           injectTo: "head" as const,
         },

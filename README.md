@@ -38,9 +38,11 @@ bun run build:daemon       # produce ./dist/pincer
 cd examples/demo && bun run dev
 ```
 
-Open the Vite URL, press `Alt+P` (`Option+P` on macOS), hover to highlight, click
-an element, type a change, and Submit. The shortcut matches the physical key, so
-it is layout- and OS-independent; override it with `pincer({ toggleKey: "…" })`.
+Open the Vite URL, press `Alt+Shift+P` (`Option+Shift+P` on macOS), hover to
+highlight, click an element, type a change, and Submit. The shortcut matches the
+physical key, so it is layout- and OS-independent (plain `Alt+P` is avoided
+because Windows browsers reserve `Alt`/`Alt+<letter>` for the menu bar); override
+it with `pincer({ toggleKey: "…" })`.
 
 ## Bun runtime note for `@pincer/vite-react`
 

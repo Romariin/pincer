@@ -9,6 +9,7 @@
     "@types/node": "^22"
   },
   "scripts": {
+    "dev": "bun scripts/dev.ts",
     "typecheck": "tsc -b",
     "test": "bun test",
     "build:overlay": "bun run --cwd packages/overlay build",
