@@ -69,7 +69,7 @@ export class Orchestrator {
   }
 
   harnessAvailability(): HarnessAvailability[] {
-    return this.harnesses.map((h) => ({ ...h.adapter.info, detected: h.detected }));
+    return this.harnesses.map((h) => ({ ...h.adapter.info, models: h.models, detected: h.detected }));
   }
 
   private harnessFor(id: string): ResolvedHarness | undefined {

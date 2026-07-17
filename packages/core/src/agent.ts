@@ -1,6 +1,6 @@
 import type { SourceLocation } from "./source";
 import type { DomContext } from "./dom";
-import type { AgentEvent, HarnessInfo, PromptElement } from "./protocol";
+import type { AgentEvent, HarnessInfo, HarnessModel, PromptElement } from "./protocol";
 
 export type { AgentEvent };
 
@@ -41,6 +41,11 @@ export interface AgentAdapter {
   invocation(task: AgentTask, command: string[]): AgentInvocation;
   /** Parse one stdout line into a normalized event, or null to ignore it. */
   parseLine(line: string): AgentEvent | null;
+  /**
+   * Dynamically enumerate models for the command bar. Called once at startup for
+   * a detected harness; return [] to fall back to the static `info.models`.
+   */
+  listModels?(command: string[]): Promise<HarnessModel[]>;
 }
 
 export interface AgentResult {

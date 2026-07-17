@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { AgentAdapter, AgentEvent, HarnessInfo } from "@pincer/core";
+import type { AgentAdapter, AgentEvent, HarnessInfo, HarnessModel } from "@pincer/core";
 import { composePrompt } from "./prompt";
 
 const info: HarnessInfo = {
@@ -8,6 +8,7 @@ const info: HarnessInfo = {
   glyph: "◇",
   c1: "#a08be2",
   c2: "#7a5fd0",
+  icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ed4abf"/><stop offset=".5" stop-color="#9b4dff"/><stop offset="1" stop-color="#5ad8e6"/></linearGradient></defs><path fill="url(#g)" d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z"/></svg>',
   models: [
     { id: "", label: "Default" },
     { id: "opus", label: "Opus" },
@@ -47,9 +48,42 @@ export const ompAdapter: AgentAdapter = {
     }
   },
 
+  async listModels(command: string[]): Promise<HarnessModel[]> {
+    try {
+      const proc = Bun.spawn([...command, "models", "--json"], {
+        env: process.env,
+        stdout: "pipe",
+        stderr: "ignore",
+        stdin: "ignore",
+        signal: AbortSignal.timeout(10_000),
+      });
+      const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      if (code !== 0) return [];
+      const parsed = JSON.parse(out) as {
+        models?: Array<{ selector?: string; id?: string; name?: string; thinking?: string[] | null }>;
+      };
+      const dynamic = (parsed.models ?? [])
+        .map((m) => {
+          const model: HarnessModel = {
+            id: m.selector ?? m.id ?? "",
+            label: m.name ?? m.id ?? m.selector ?? "",
+          };
+          if (Array.isArray(m.thinking) && m.thinking.length > 0) model.efforts = m.thinking;
+          return model;
+        })
+        .filter((m) => m.id.length > 0);
+      if (dynamic.length === 0) return [];
+      return [{ id: "", label: "Default" }, ...dynamic];
+    } catch {
+      return [];
+    }
+  },
+
   invocation(task, command) {
     const sessionDir = join(task.projectRoot, ".pincer/omp-sessions");
-    const thinking = task.effort ? THINKING[task.effort] : undefined;
+    // Effort is either a shared capitalized label (map via THINKING) or a raw
+    // per-model omp level (pass through unchanged).
+    const thinking = task.effort ? (THINKING[task.effort] ?? task.effort) : undefined;
     const argv = [
       ...command,
       "-p",

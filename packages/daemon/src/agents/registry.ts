@@ -1,4 +1,4 @@
-import type { AgentAdapter } from "@pincer/core";
+import type { AgentAdapter, HarnessModel } from "@pincer/core";
 import { claudeAdapter } from "./claude";
 import { ompAdapter } from "./omp";
 import { codexAdapter } from "./codex";
@@ -21,6 +21,7 @@ export interface ResolvedHarness {
   adapter: AgentAdapter;
   command: string[];
   detected: boolean;
+  models: HarnessModel[];
 }
 
 /**
@@ -38,7 +39,16 @@ export async function resolveHarnesses(config: AgentConfig): Promise<ResolvedHar
       const command =
         config.agentId === adapter.id && config.command ? config.command : adapter.defaultCommand;
       const detected = await adapter.detect(command);
-      return { adapter, command, detected };
+      let models = adapter.info.models;
+      if (detected && adapter.listModels) {
+        try {
+          const dynamic = await adapter.listModels(command);
+          if (dynamic.length > 0) models = dynamic;
+        } catch {
+          // keep static models on any failure
+        }
+      }
+      return { adapter, command, detected, models };
     }),
   );
 }

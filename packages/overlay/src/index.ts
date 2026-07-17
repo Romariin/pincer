@@ -40,12 +40,31 @@ const FALLBACK_HARNESS: HarnessInfo = {
   supportsEffort: false,
 };
 const EFFORT_DESC: Record<string, string> = {
-  Minimal: "Fastest, least reasoning",
-  Low: "Quick replies",
-  Medium: "Balanced",
-  High: "Deeper reasoning",
-  Max: "Most thorough, slowest",
+  off: "No reasoning",
+  minimal: "Fastest, least reasoning",
+  low: "Quick replies",
+  medium: "Balanced",
+  high: "Deeper reasoning",
+  xhigh: "Extra-deep reasoning",
+  max: "Most thorough, slowest",
+  auto: "Model decides",
 };
+const EFFORT_LABEL: Record<string, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "XHigh",
+  max: "Max",
+  auto: "Auto",
+};
+function effortLabel(e: string): string {
+  return EFFORT_LABEL[e.toLowerCase()] ?? e;
+}
+function effortDesc(e: string): string {
+  return EFFORT_DESC[e.toLowerCase()] ?? "";
+}
 
 const SVG = {
   close:
@@ -336,8 +355,36 @@ function start(): void {
     return harnessMap.get(id) ?? FALLBACK_HARNESS;
   }
 
+  let iconSeq = 0;
+
   function avatar(info: HarnessInfo, size: number): HTMLElement {
     const r = Math.round(size * 0.28);
+    if (info.icon) {
+      const a = el(
+        "span",
+        `flex:0 0 auto;width:${size}px;height:${size}px;border-radius:${r}px;background:linear-gradient(145deg,${FALLBACK_HARNESS.c1},${FALLBACK_HARNESS.c2});display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 0 rgba(255,255,255,0.22);`,
+      );
+      a.innerHTML = info.icon;
+      const svg = a.querySelector("svg");
+      if (svg) {
+        const iconSize = Math.round(size * 0.62);
+        svg.setAttribute("width", String(iconSize));
+        svg.setAttribute("height", String(iconSize));
+        svg.style.display = "block";
+        // Uniquify gradient ids so multiple avatars never share/break a def.
+        const uid = `pcr-ic-${iconSeq++}`;
+        svg.querySelectorAll("linearGradient[id],radialGradient[id]").forEach((g) => {
+          const old = g.getAttribute("id");
+          if (!old) return;
+          const nid = `${uid}-${old}`;
+          g.setAttribute("id", nid);
+          svg
+            .querySelectorAll(`[fill="url(#${old})"]`)
+            .forEach((n) => n.setAttribute("fill", `url(#${nid})`));
+        });
+      }
+      return a;
+    }
     const a = el(
       "span",
       `flex:0 0 auto;width:${size}px;height:${size}px;border-radius:${r}px;background:linear-gradient(145deg,${info.c1},${info.c2});display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:${Math.round(size * 0.42)}px;font-weight:700;font-family:${MONO};box-shadow:inset 0 1px 0 rgba(255,255,255,0.22);letter-spacing:-0.02em;`,
@@ -358,6 +405,16 @@ function start(): void {
     return info.models.find((m) => m.id === id)?.label ?? (id || "Default");
   }
 
+  function modelEfforts(info: HarnessInfo, id: string): string[] {
+    const m = info.models.find((x) => x.id === id);
+    return m?.efforts && m.efforts.length ? m.efforts : efforts;
+  }
+
+  function clampEffort(list: string[], current: string): string {
+    if (list.includes(current)) return current;
+    return list.includes("high") ? "high" : (list[list.length - 2] ?? list[list.length - 1] ?? current);
+  }
+
   function updateCfg(patch: Partial<{ harnessId: string; model: string; effort: string }>): void {
     if (view === "chat" && conversationId) {
       conversations = conversations.map((c) => (c.id === conversationId ? { ...c, ...patch } : c));
@@ -374,7 +431,7 @@ function start(): void {
     harnessBtn.textContent = "";
     harnessBtn.append(avatar(info, 18), el("span", "font-weight:600;", info.label));
     agentBtn.textContent = modelLabel(info, c.model);
-    effortBtn.textContent = c.effort;
+    effortBtn.textContent = effortLabel(c.effort);
   }
 
   // -------------------------------------------------------------------------
@@ -431,8 +488,9 @@ function start(): void {
         for (const h of harnesses) harnessMap.set(h.id, h);
         const def = msg.defaultHarnessId ?? harnesses.find((h) => h.detected)?.id ?? harnesses[0]?.id ?? "";
         draft.harnessId = def;
-        draft.model = harnessInfo(def).defaultModel;
-        if (!efforts.includes(draft.effort)) draft.effort = efforts[efforts.length - 2] ?? efforts[0] ?? "High";
+        const dinfo = harnessInfo(def);
+        draft.model = dinfo.defaultModel;
+        draft.effort = clampEffort(modelEfforts(dinfo, draft.model), draft.effort);
         renderCmdBar();
         break;
       }
@@ -656,7 +714,7 @@ function start(): void {
       el("span", "color:#8a8a90;", "agent "),
       el("span", "font-weight:600;", modelLabel(info, c.model)),
       el("span", "color:#8a8a90;", "   effort "),
-      el("span", `font-weight:600;color:${ACCENT};`, c.effort),
+      el("span", `font-weight:600;color:${ACCENT};`, effortLabel(c.effort)),
     );
     badgeEl.appendChild(tip);
     b.appendChild(badgeEl);
@@ -810,10 +868,11 @@ function start(): void {
         onClick: () => choose("agent", m.id),
       }));
     } else {
+      const info = harnessInfo(c.harnessId);
       title = "EFFORT";
-      options = efforts.map((e) => ({
-        label: e,
-        sub: EFFORT_DESC[e] ?? "",
+      options = modelEfforts(info, c.model).map((e) => ({
+        label: effortLabel(e),
+        sub: effortDesc(e),
         dot: null,
         selected: c.effort === e,
         onClick: () => choose("effort", e),
@@ -841,10 +900,20 @@ function start(): void {
     if (type === "harness") {
       const info = harnessInfo(val);
       const patch: Partial<{ harnessId: string; model: string; effort: string }> = { harnessId: val };
-      if (!info.models.some((m) => m.id === cfg().model)) patch.model = info.defaultModel;
+      let model = cfg().model;
+      if (!info.models.some((m) => m.id === model)) {
+        model = info.defaultModel;
+        patch.model = model;
+      }
+      const effort = clampEffort(modelEfforts(info, model), cfg().effort);
+      if (effort !== cfg().effort) patch.effort = effort;
       updateCfg(patch);
     } else if (type === "agent") {
-      updateCfg({ model: val });
+      const info = harnessInfo(cfg().harnessId);
+      const patch: Partial<{ harnessId: string; model: string; effort: string }> = { model: val };
+      const effort = clampEffort(modelEfforts(info, val), cfg().effort);
+      if (effort !== cfg().effort) patch.effort = effort;
+      updateCfg(patch);
     } else {
       updateCfg({ effort: val });
     }

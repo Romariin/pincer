@@ -5,6 +5,8 @@ import type { DomContext } from "./dom";
 export interface HarnessModel {
   id: string;
   label: string;
+  /** Thinking levels this model supports (raw CLI values); omit to use the harness's shared efforts. */
+  efforts?: string[];
 }
 
 /** A coding CLI the daemon can drive (the "harness" segment of the command bar). */
@@ -13,6 +15,8 @@ export interface HarnessInfo {
   label: string;
   /** Short monogram rendered in the harness avatar, e.g. ">_". */
   glyph: string;
+  /** Optional raw SVG markup rendered in the avatar in place of the glyph. */
+  icon?: string;
   /** Avatar gradient endpoints. */
   c1: string;
   c2: string;

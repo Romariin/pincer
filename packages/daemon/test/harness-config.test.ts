@@ -19,14 +19,23 @@ async function omp(): Promise<Harness> {
   return harness;
 }
 
-test("welcome advertises detected harnesses, efforts, and a default", async () => {
+test("welcome advertises detected harnesses, efforts, and dynamic models", async () => {
   h = await createHarness({ agentId: "omp", agentCommand: ["bun", FAKE_OMP] });
   const w = await h.next("welcome");
   expect(w.defaultHarnessId).toBe("omp");
   expect(w.efforts).toContain("High");
   const ompH = w.harnesses.find((x) => x.id === "omp");
   expect(ompH?.detected).toBe(true);
-  expect(ompH?.models.length ?? 0).toBeGreaterThan(0);
+  // Models come from `omp models --json` (fake-omp catalog), Default first.
+  expect(ompH?.models[0]).toEqual({ id: "", label: "Default" });
+  // Reasoning model carries its per-model thinking levels.
+  expect(ompH?.models).toContainEqual({
+    id: "anthropic/claude-opus-4-8",
+    label: "Claude Opus 4.8",
+    efforts: ["low", "medium", "high", "max"],
+  });
+  // Non-reasoning model (thinking: null) has no per-model efforts.
+  expect(ompH?.models).toContainEqual({ id: "anthropic/claude-sonnet-5", label: "Claude Sonnet 5" });
 });
 
 test("conversation config drives the model + effort CLI flags", async () => {

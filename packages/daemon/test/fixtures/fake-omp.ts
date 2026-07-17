@@ -12,6 +12,20 @@ if (Bun.argv.includes("--version")) {
 
 const argv = Bun.argv.slice(2);
 
+// `listModels` probes with `models --json`: return a fixed catalog and exit
+// before any turn/edit side effects.
+if (argv[0] === "models" && argv.includes("--json")) {
+  process.stdout.write(
+    JSON.stringify({
+      models: [
+        { provider: "anthropic", id: "claude-opus-4-8", selector: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8", thinking: ["low", "medium", "high", "max"] },
+        { provider: "anthropic", id: "claude-sonnet-5", selector: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", thinking: null },
+      ],
+    }),
+  );
+  process.exit(0);
+}
+
 const record = process.env["PINCER_FAKE_RECORD"];
 if (record) await Bun.write(record, JSON.stringify({ argv }, null, 2));
 
