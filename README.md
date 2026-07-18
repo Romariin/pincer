@@ -26,17 +26,35 @@ so any change is revertable, acceptable (merge to base), or discardable.
 
 ## Quick start
 
+Two ways to get the overlay into your app:
+
+- **`pincer dev` (zero install)** — wraps your dev server behind an injection
+  proxy; nothing to add to the app. Source resolution falls back to DOM context
+  + agent search.
+- **Framework plugin** (`@pincer/vite-react`, react-grab style) — installed in
+  the app; tags every element with its exact `file:line:col` (Contract A) for
+  maximum precision.
+
 ```sh
 bun install
 bun run build:overlay      # build the overlay bundle (needed before dev/E2E)
 bun run build:daemon       # produce ./dist/pincer
 
-# terminal 1 — run the daemon against your project
-./dist/pincer --project examples/demo
+# zero-install: one terminal, daemon + your dev server + injection proxy
+./dist/pincer dev --project examples/demo -- bun run dev
+# → open the printed proxy URL (default http://localhost:7392)
 
-# terminal 2 — run the app's dev server
+# plugin route: terminal 1 — run the daemon against your project
+./dist/pincer --project examples/demo
+# terminal 2 — run the app's dev server (with @pincer/vite-react configured)
 cd examples/demo && bun run dev
 ```
+
+`pincer dev` auto-detects the dev server URL from its output; pass
+`--target http://localhost:<port>` to skip detection (with `--target` you can
+also omit the command entirely and front an already-running server). The daemon
+only binds `127.0.0.1` and rejects WebSocket connections from non-localhost
+browser origins.
 
 Open the Vite URL, press `Alt+Shift+P` (`Option+Shift+P` on macOS), hover to
 highlight, click an element, type a change, and Submit. The shortcut matches the

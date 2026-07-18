@@ -16,6 +16,16 @@ import { Orchestrator, type Emit } from "./orchestrator";
 
 const DAEMON_VERSION = "0.1.0";
 
+// Browsers do not apply CORS to WebSocket upgrades, so without this check any
+// web page (or a DNS-rebound origin) could connect and drive an agent that
+// edits local files. Non-browser clients send no Origin header and are local
+// by virtue of the 127.0.0.1 bind.
+const LOCAL_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]+\.localhost)(:\d+)?$/i;
+
+export function isLocalOrigin(origin: string | null): boolean {
+  return origin === null || LOCAL_ORIGIN_RE.test(origin);
+}
+
 export interface DaemonOptions {
   projectRoot: string;
   port: number;
@@ -54,9 +64,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   };
 
   const server = Bun.serve({
+    hostname: "127.0.0.1",
     port: opts.port,
     fetch(req, srv) {
-      if (srv.upgrade(req)) return undefined;
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const origin = req.headers.get("origin");
+        if (!isLocalOrigin(origin)) {
+          log(`rejected WebSocket upgrade from origin ${origin}`);
+          return new Response("forbidden origin", { status: 403 });
+        }
+        if (srv.upgrade(req)) return undefined;
+      }
       return new Response("pincer daemon");
     },
     websocket: {
