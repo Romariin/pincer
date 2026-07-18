@@ -56,6 +56,7 @@ your own project (`bunx --bun vite` / `bun run --bun dev`).
 ## Development
 
 ```sh
+bun run lint        # Biome's recommended lint rules across the monorepo
 bun run typecheck   # tsc -b across all packages
 bun test            # daemon protocol suite + adapter transform + core round-trip
 ```

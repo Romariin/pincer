@@ -1,4 +1,4 @@
-import * as React from "react"
+import type * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
+  // biome-ignore-start lint/a11y/useSemanticElements: A div preserves the component's existing layout while exposing its related controls as a group.
   return (
     <div
       data-slot="input-group"
@@ -18,6 +19,7 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
       {...props}
     />
   )
+  // biome-ignore-end lint/a11y/useSemanticElements: A div preserves the component's existing layout while exposing its related controls as a group.
 }
 
 const inputGroupAddonVariants = cva(
@@ -46,10 +48,12 @@ function InputGroupAddon({
   align = "inline-start",
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof inputGroupAddonVariants>) {
+  // biome-ignore-start lint/a11y/useSemanticElements: The addon groups nested controls and forwards pointer focus without changing its layout element.
+  // biome-ignore-start lint/a11y/useKeyWithClickEvents: The input already provides the equivalent keyboard focus target.
   return (
     <div
-      role="group"
       data-slot="input-group-addon"
+      role="group"
       data-align={align}
       className={cn(inputGroupAddonVariants({ align }), className)}
       onClick={(e) => {
@@ -61,6 +65,8 @@ function InputGroupAddon({
       {...props}
     />
   )
+  // biome-ignore-end lint/a11y/useKeyWithClickEvents: The input already provides the equivalent keyboard focus target.
+  // biome-ignore-end lint/a11y/useSemanticElements: The addon groups nested controls and forwards pointer focus without changing its layout element.
 }
 
 const inputGroupButtonVariants = cva(

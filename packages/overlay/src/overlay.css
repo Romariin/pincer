@@ -98,13 +98,16 @@
   display: none;
 }
 /* Panel spans full width (minus gaps) on narrow viewports (ported from the old @media rule). */
+/* biome-ignore-start lint/complexity/noImportantStyles: Narrow sizing must override the panel's desktop inline dimensions. */
 @media (max-width: 600px) {
   .pcr-panel {
     left: 12px !important;
     width: auto !important;
   }
 }
+/* biome-ignore-end lint/complexity/noImportantStyles: Narrow sizing must override the panel's desktop inline dimensions. */
 
+/* biome-ignore-start lint/complexity/noImportantStyles: Reduced motion must override every component animation. */
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,
@@ -113,6 +116,7 @@
     animation: none !important;
   }
 }
+/* biome-ignore-end lint/complexity/noImportantStyles: Reduced motion must override every component animation. */
 
 :root {
   --background: oklch(1 0 0);

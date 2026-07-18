@@ -24,7 +24,7 @@ export function composePrompt(task: AgentTask): string {
       lines.push(`${prefix}Source mapping was unavailable; use the DOM context below to locate it.`);
     }
     const idPart = t.domContext.id ? `#${t.domContext.id}` : "";
-    const classPart = t.domContext.classes.length > 0 ? "." + t.domContext.classes.join(".") : "";
+    const classPart = t.domContext.classes.length > 0 ? `.${t.domContext.classes.join(".")}` : "";
     const textPart = t.domContext.text ? ` ${t.domContext.text}` : "";
     lines.push(`${indent}Element: <${t.domContext.tag}${idPart}${classPart}>${textPart}`);
     lines.push(`${indent}DOM ancestry: ${t.domContext.ancestry.join(" > ")}`);

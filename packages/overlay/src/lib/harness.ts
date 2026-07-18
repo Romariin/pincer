@@ -51,7 +51,7 @@ export function modelLabel(info: HarnessInfo, id: string): string {
 
 export function modelEfforts(info: HarnessInfo, id: string, efforts: string[]): string[] {
   const m = info.models.find((x) => x.id === id);
-  return m?.efforts && m.efforts.length ? m.efforts : efforts;
+  return m?.efforts?.length ? m.efforts : efforts;
 }
 
 export function clampEffort(list: string[], current: string): string {

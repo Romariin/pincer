@@ -80,7 +80,7 @@ test("omp happy turn edits the file in place and captures the session id", async
   expect(composed).toContain(h.userPrompt);
 
   const turn = lastTurnRow(h, convId);
-  expect(turn["agent_session_id"]).toBe("omp-sess-1");
+  expect(turn.agent_session_id).toBe("omp-sess-1");
 });
 
 test("omp resume uses -r with the captured session id on the second turn", async () => {

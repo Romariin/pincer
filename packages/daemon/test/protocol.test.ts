@@ -73,8 +73,8 @@ test("happy turn edits the file in place and records the turn", async () => {
   expect(record).toContain(h.userPrompt);
 
   const turn = lastTurnRow(h, convId);
-  expect(turn["checkpoint"]).toBeNull();
-  expect(turn["agent_session_id"]).toBe("sess-1");
+  expect(turn.checkpoint).toBeNull();
+  expect(turn.agent_session_id).toBe("sess-1");
 });
 
 test("revert is unavailable in direct-edit mode", async () => {
@@ -157,7 +157,7 @@ test("cancel kills the running turn and leaves the file unchanged", async () => 
 
   expect(h.readTarget()).not.toContain("PINCER_EDIT_MARKER");
   const turn = lastTurnRow(h, convId);
-  expect(turn["status"]).toBe("cancelled");
+  expect(turn.status).toBe("cancelled");
 });
 
 test("a second turn resumes the prior agent session", async () => {

@@ -20,6 +20,7 @@ export function Tray(): ReactNode {
     setFades({ left: n.scrollLeft > 2, right: n.scrollLeft + n.clientWidth < n.scrollWidth - 2 });
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Selection changes require remeasuring the rendered chip row.
   useEffect(() => {
     updateFades();
   }, [selections, updateFades]);
@@ -35,9 +36,9 @@ export function Tray(): ReactNode {
             onScroll={updateFades}
             className="pcr-noscroll flex flex-nowrap gap-1.5 overflow-x-auto py-px"
           >
-            {selections.map((sel, i) => (
+            {selections.map((sel) => (
               <span
-                key={i}
+                key={sel.id}
                 style={{ fontFamily: MONO }}
                 className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] border border-primary/40 bg-primary/15 py-1 pl-2 pr-1 text-xs text-primary"
               >

@@ -93,9 +93,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 
 function readConfig(msg: Record<string, unknown>): ConversationConfig {
   const c: ConversationConfig = {};
-  if (typeof msg["harnessId"] === "string") c.harnessId = msg["harnessId"];
-  if (typeof msg["model"] === "string") c.model = msg["model"];
-  if (typeof msg["effort"] === "string") c.effort = msg["effort"];
+  if (typeof msg.harnessId === "string") c.harnessId = msg.harnessId;
+  if (typeof msg.model === "string") c.model = msg.model;
+  if (typeof msg.effort === "string") c.effort = msg.effort;
   return c;
 }
 

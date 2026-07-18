@@ -17,9 +17,9 @@ export function PickerLayer({ hoverRect, selectionRects }: PickerLayerState): Re
 
   return (
     <>
-      {selectionRects.map((rect, i) => (
+      {selectionRects.map(({ id, rect }) => (
         <div
-          key={i}
+          key={id}
           style={{
             ...boxStyle(rect),
             border: `2px solid ${PRIMARY}`,

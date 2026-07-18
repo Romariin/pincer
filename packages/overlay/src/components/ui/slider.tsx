@@ -16,6 +16,7 @@ function Slider({
       ? defaultValue
       : [min, max]
 
+  // biome-ignore-start lint/suspicious/noArrayIndexKey: Slider thumbs are positional controls with a stable order.
   return (
     <SliderPrimitive.Root
       className={cn("data-horizontal:w-full data-vertical:h-full", className)}
@@ -47,6 +48,7 @@ function Slider({
       </SliderPrimitive.Control>
     </SliderPrimitive.Root>
   )
+  // biome-ignore-end lint/suspicious/noArrayIndexKey: Slider thumbs are positional controls with a stable order.
 }
 
 export { Slider }

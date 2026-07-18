@@ -66,9 +66,9 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
   const appendText = "\n// PINCER_EDIT_MARKER\n";
   const userPrompt = "make the button say Send";
 
-  process.env["PINCER_FAKE_TARGET"] = targetAbs;
-  process.env["PINCER_FAKE_APPEND"] = appendText;
-  process.env["PINCER_FAKE_RECORD"] = recordFile;
+  process.env.PINCER_FAKE_TARGET = targetAbs;
+  process.env.PINCER_FAKE_APPEND = appendText;
+  process.env.PINCER_FAKE_RECORD = recordFile;
 
   const agentId = opts.agentId ?? "claude-code";
   const agentCommand = opts.agentCommand ?? ["bun", FAKE_CLAUDE];
@@ -84,8 +84,9 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     const wi = waiters.findIndex((w) => w.pred(msg));
     if (wi >= 0) {
       const [w] = waiters.splice(wi, 1);
-      clearTimeout(w!.timer);
-      w!.resolve(msg);
+      if (!w) return;
+      clearTimeout(w.timer);
+      w.resolve(msg);
     } else {
       buffered.push(msg);
     }
@@ -107,7 +108,10 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
 
   const nextWhere = (pred: (m: ServerMessage) => boolean, timeoutMs = 15_000): Promise<ServerMessage> => {
     const idx = buffered.findIndex(pred);
-    if (idx >= 0) return Promise.resolve(buffered.splice(idx, 1)[0]!);
+    if (idx >= 0) {
+      const [message] = buffered.splice(idx, 1);
+      if (message) return Promise.resolve(message);
+    }
     return new Promise<ServerMessage>((resolve, reject) => {
       const timer = setTimeout(() => {
         const wi = waiters.findIndex((w) => w.resolve === resolve);
@@ -146,7 +150,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
       return readFileSync(recordFile, "utf8");
     },
     dirtyTarget() {
-      writeFileSync(targetAbs, readFileSync(targetAbs, "utf8") + "\n// dirtied\n");
+      writeFileSync(targetAbs, `${readFileSync(targetAbs, "utf8")}\n// dirtied\n`);
     },
     async restart() {
       ws.close();

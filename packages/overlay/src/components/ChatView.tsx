@@ -41,7 +41,7 @@ export function ChatView(): ReactNode {
         <MessageScrollerViewport>
           <MessageScrollerContent className="gap-[18px] px-[14px] pb-2 pt-4">
             {messages.map((m, i) => (
-              <MessageScrollerItem key={i} messageId={String(i)} scrollAnchor={m.role === "user"}>
+              <MessageScrollerItem key={m.id} messageId={String(m.id)} scrollAnchor={m.role === "user"}>
                 <Message msg={m} streaming={i === streamingIndex} />
               </MessageScrollerItem>
             ))}

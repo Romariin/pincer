@@ -1,6 +1,5 @@
 import { useId, useMemo, type CSSProperties, type ReactNode } from "react";
 import type { HarnessInfo } from "@pincer/core";
-import { FALLBACK_HARNESS } from "@/lib/harness";
 import { MONO } from "@/lib/constants";
 
 /** Resize the harness's raw SVG icon and uniquify its gradient ids so multiple avatars never collide. */
@@ -18,7 +17,9 @@ function prepareIcon(iconHtml: string, size: number, uid: string): string {
       if (!old) return;
       const nid = `${uid}-${old}`;
       g.setAttribute("id", nid);
-      svg.querySelectorAll(`[fill="url(#${old})"]`).forEach((n) => n.setAttribute("fill", `url(#${nid})`));
+      svg.querySelectorAll(`[fill="url(#${old})"]`).forEach((n) => {
+        n.setAttribute("fill", `url(#${nid})`);
+      });
     });
   }
   return div.innerHTML;
@@ -45,12 +46,14 @@ export function Avatar({ info, size }: { info: HarnessInfo; size: number }): Rea
   };
 
   if (iconHtml !== null) {
+    // biome-ignore-start lint/security/noDangerouslySetInnerHtml: Harness icons are trusted SVG constants supplied by the local daemon catalog.
     return (
       <span
         style={{ ...base, background: "transparent", boxShadow: "inset 0 0 0 1px var(--border)" }}
         dangerouslySetInnerHTML={{ __html: iconHtml }}
       />
     );
+    // biome-ignore-end lint/security/noDangerouslySetInnerHtml: Harness icons are trusted SVG constants supplied by the local daemon catalog.
   }
 
   return (
