@@ -11,13 +11,13 @@ function toPatch(file: string, hunks: DiffHunk[]): string {
     if (h.type === "ctx") {
       oldC++;
       newC++;
-      body += " " + h.text + "\n";
+      body += ` ${h.text}\n`;
     } else if (h.type === "del") {
       oldC++;
-      body += "-" + h.text + "\n";
+      body += `-${h.text}\n`;
     } else {
       newC++;
-      body += "+" + h.text + "\n";
+      body += `+${h.text}\n`;
     }
   }
   return `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1,${oldC} +1,${newC} @@\n${body}`;

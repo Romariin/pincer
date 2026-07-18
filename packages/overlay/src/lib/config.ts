@@ -47,9 +47,9 @@ export function parseToggleKey(raw: string | undefined): ParsedToggle {
   }
   if (!sawKey) result.key = "p";
   result.code = /^[a-z]$/.test(result.key)
-    ? "Key" + result.key.toUpperCase()
+    ? `Key${result.key.toUpperCase()}`
     : /^[0-9]$/.test(result.key)
-      ? "Digit" + result.key
+      ? `Digit${result.key}`
       : null;
   return result;
 }

@@ -1,4 +1,6 @@
 const MONO = "ui-monospace,'SF Mono',Menlo,Consolas,monospace";
+const INLINE_CODE_MARKER = "\uE000";
+const CODE_BLOCK_MARKER = "\uE001";
 
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -9,9 +11,9 @@ export function highlightCode(code: string): string {
   const re =
     /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\/\/[^\n]*|\b\d+\b|\b(?:function|const|let|var|return|if|else|for|import|from|export|default|class|new|await|async|true|false|null)\b)/g;
   let last = 0;
-  let m: RegExpExecArray | null;
+  let m = re.exec(code);
   let out = "";
-  while ((m = re.exec(code))) {
+  while (m) {
     if (m.index > last) out += escapeHtml(code.slice(last, m.index));
     const t = m[0];
     let col = "#c9c9d0";
@@ -21,6 +23,7 @@ export function highlightCode(code: string): string {
     else col = "#f7a8c4";
     out += `<span style="color:${col}">${escapeHtml(t)}</span>`;
     last = re.lastIndex;
+    m = re.exec(code);
   }
   if (last < code.length) out += escapeHtml(code.slice(last));
   return out;
@@ -34,10 +37,10 @@ function inline(t: string): string {
     codes.push(
       `<code style="font-family:${MONO};font-size:0.9em;background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary);padding:1px 5px;border-radius:5px;">${c}</code>`,
     );
-    return `\u0001${codes.length - 1}\u0001`;
+    return `${INLINE_CODE_MARKER}${codes.length - 1}${INLINE_CODE_MARKER}`;
   });
   r = r.replace(/\*\*([^*]+)\*\*/g, '<strong style="font-weight:700;color:var(--foreground);">$1</strong>');
-  r = r.replace(/\u0001(\d+)\u0001/g, (_m, n: string) => codes[Number(n)] ?? "");
+  r = r.replace(/\uE000(\d+)\uE000/g, (_m, n: string) => codes[Number(n)] ?? "");
   return r;
 }
 
@@ -48,7 +51,7 @@ export function renderMarkdown(src: string): string {
     blocks.push(
       `<pre style="margin:.5em 0;padding:11px;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow-x:auto;font-family:${MONO};font-size:12px;line-height:1.55;color:var(--foreground);"><code>${highlightCode(body.replace(/\n$/, ""))}</code></pre>`,
     );
-    return `\u0000B${blocks.length - 1}\u0000`;
+    return `${CODE_BLOCK_MARKER}B${blocks.length - 1}${CODE_BLOCK_MARKER}`;
   });
 
   const lines = withoutFences.split("\n");
@@ -63,7 +66,7 @@ export function renderMarkdown(src: string): string {
     }
   };
   for (const ln of lines) {
-    const fence = ln.match(/^\u0000B(\d+)\u0000$/);
+    const fence = ln.match(/^\uE001B(\d+)\uE001$/);
     if (fence) {
       flush();
       out.push(blocks[Number(fence[1])] ?? "");

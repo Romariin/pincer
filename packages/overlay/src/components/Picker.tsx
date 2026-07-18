@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import type { HarnessAvailability, HarnessModel } from "@pincer/core";
 import { usePincerStore, useCfg } from "@/state/store";
 import { effortLabel, harnessInfo, modelEfforts, modelLabel } from "@/lib/harness";
@@ -114,9 +114,9 @@ function ModelCombobox({ container }: { container: Container }): ReactNode {
 function EffortSlider({ list, value, onCommit }: { list: string[]; value: string; onCommit: (v: string) => void }): ReactNode {
   const n = list.length;
   const idx = Math.max(0, list.indexOf(value));
-  const [drag, setDrag] = useState<number | null>(null);
-  useEffect(() => setDrag(null), [idx, n]);
-  const shown = drag ?? idx;
+  const listKey = list.join("\u0000");
+  const [drag, setDrag] = useState<{ index: number; listKey: string; value: string } | null>(null);
+  const shown = drag?.listKey === listKey && drag.value === value ? drag.index : idx;
   const at = (i: number): number => (i / (n - 1)) * 100;
   const tickStyle = (i: number): CSSProperties => ({ left: `${at(i)}%`, transform: "translate(-50%,-50%)" });
   const labelStyle = (i: number): CSSProperties => ({ left: `${at(i)}%`, transform: "translateX(-50%)" });
@@ -141,7 +141,9 @@ function EffortSlider({ list, value, onCommit }: { list: string[]; value: string
           max={n - 1}
           step={1}
           value={[shown]}
-          onValueChange={(v) => setDrag(Array.isArray(v) ? (v[0] ?? 0) : v)}
+          onValueChange={(v) => {
+            setDrag({ index: Array.isArray(v) ? (v[0] ?? 0) : v, listKey, value });
+          }}
           onValueCommitted={(v) => {
             const i = Array.isArray(v) ? (v[0] ?? 0) : v;
             setDrag(null);

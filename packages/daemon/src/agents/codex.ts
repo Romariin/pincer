@@ -83,39 +83,39 @@ export const codexAdapter: AgentAdapter = {
     }
 
     // Legacy envelope: { id, msg: { type, ... } }
-    const inner = msg["msg"] as Record<string, unknown> | undefined;
-    if (inner && typeof inner["type"] === "string") {
-      const t = inner["type"] as string;
+    const inner = msg.msg as Record<string, unknown> | undefined;
+    if (inner && typeof inner.type === "string") {
+      const t = inner.type as string;
       if (t === "session_configured") {
-        return { kind: "status", text: "codex session", sessionId: str(inner["session_id"]) };
+        return { kind: "status", text: "codex session", sessionId: str(inner.session_id) };
       }
-      if (t === "agent_message_delta") return { kind: "text", text: String(inner["delta"] ?? "") };
-      if (t === "agent_message") return { kind: "text", text: String(inner["message"] ?? "") };
+      if (t === "agent_message_delta") return { kind: "text", text: String(inner.delta ?? "") };
+      if (t === "agent_message") return { kind: "text", text: String(inner.message ?? "") };
       if (t === "exec_command_begin" || t === "patch_apply_begin") {
-        return { kind: "tool", name: t === "patch_apply_begin" ? "Edit" : "Bash", detail: str(inner["command"]) ?? str(inner["path"]) };
+        return { kind: "tool", name: t === "patch_apply_begin" ? "Edit" : "Bash", detail: str(inner.command) ?? str(inner.path) };
       }
       if (t === "task_complete" || t === "turn_complete") {
-        return { kind: "result", success: true, sessionId: null, summary: String(inner["last_agent_message"] ?? "") };
+        return { kind: "result", success: true, sessionId: null, summary: String(inner.last_agent_message ?? "") };
       }
       return null;
     }
 
     // Newer envelope: { type: "item.completed", item: { item_type|type, text|... } }
-    const type = str(msg["type"]);
-    if (type && type.startsWith("item")) {
-      const item = msg["item"] as Record<string, unknown> | undefined;
-      const it = item ? str(item["item_type"]) ?? str(item["type"]) : undefined;
+    const type = str(msg.type);
+    if (type?.startsWith("item")) {
+      const item = msg.item as Record<string, unknown> | undefined;
+      const it = item ? str(item.item_type) ?? str(item.type) : undefined;
       if (item && (it === "assistant_message" || it === "agent_message")) {
-        return { kind: "text", text: String(item["text"] ?? item["message"] ?? "") };
+        return { kind: "text", text: String(item.text ?? item.message ?? "") };
       }
       if (item && (it === "command_execution" || it === "file_change")) {
-        return { kind: "tool", name: it === "file_change" ? "Edit" : "Bash", detail: str(item["command"]) ?? str(item["path"]) };
+        return { kind: "tool", name: it === "file_change" ? "Edit" : "Bash", detail: str(item.command) ?? str(item.path) };
       }
       return null;
     }
 
     if (type === "turn.completed" || type === "thread.completed") {
-      return { kind: "result", success: true, sessionId: str(msg["thread_id"]) ?? null, summary: "" };
+      return { kind: "result", success: true, sessionId: str(msg.thread_id) ?? null, summary: "" };
     }
 
     return null;

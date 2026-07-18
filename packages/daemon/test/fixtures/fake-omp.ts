@@ -26,11 +26,11 @@ if (argv[0] === "models" && argv.includes("--json")) {
   process.exit(0);
 }
 
-const record = process.env["PINCER_FAKE_RECORD"];
+const record = process.env.PINCER_FAKE_RECORD;
 if (record) await Bun.write(record, JSON.stringify({ argv }, null, 2));
 
 const emit = (obj: unknown): void => {
-  process.stdout.write(JSON.stringify(obj) + "\n");
+  process.stdout.write(`${JSON.stringify(obj)}\n`);
 };
 
 emit({ type: "session", version: 3, id: "omp-sess-1" });
@@ -40,8 +40,8 @@ emit({
   assistantMessageEvent: { type: "text_delta", delta: "Applying your change…" },
 });
 
-const target = process.env["PINCER_FAKE_TARGET"];
-const append = process.env["PINCER_FAKE_APPEND"] ?? "";
+const target = process.env.PINCER_FAKE_TARGET;
+const append = process.env.PINCER_FAKE_APPEND ?? "";
 if (target) {
   const current = await Bun.file(target).text();
   await Bun.write(target, current + append);

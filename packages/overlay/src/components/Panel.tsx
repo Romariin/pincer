@@ -34,7 +34,7 @@ export function Panel(): ReactNode {
 
   // Global toggle key + Escape handling (capture phase, so it wins over the host page).
   useEffect(() => {
-    const toggle = parseToggleKey((window.__PINCER__ ?? {}).toggleKey);
+    const toggle = parseToggleKey(window.__PINCER__?.toggleKey);
     const onKeyDown = (e: KeyboardEvent): void => {
       if (matchesToggle(toggle, e)) {
         e.preventDefault();

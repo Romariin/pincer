@@ -20,8 +20,8 @@ export function breadcrumb(node: HTMLElement): string {
   let s = `<${node.tagName.toLowerCase()}`;
   if (node.id) s += `#${node.id}`;
   const cls = Array.from(node.classList);
-  if (cls.length) s += "." + cls.join(".");
-  return s + ">";
+  if (cls.length) s += `.${cls.join(".")}`;
+  return `${s}>`;
 }
 
 export function buildDomContext(node: HTMLElement): DomContext {

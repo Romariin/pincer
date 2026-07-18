@@ -37,7 +37,8 @@ test("streaming text deltas coalesce into one assistant md block and turn_comple
 
   const s = usePincerStore.getState();
   expect(s.messages.length).toBe(1);
-  const m = s.messages[0]!;
+  const m = s.messages[0];
+  if (!m) throw new Error("expected an assistant message");
   expect(m.role).toBe("assistant");
   expect(m.blocks).toEqual([{ t: "md", text: "foobar" }]);
   expect(s.turnRunning).toBe(false);
@@ -55,7 +56,8 @@ test("after the stream pointer clears, tool then diff events open a new assistan
   apply({ v: PROTOCOL_VERSION, type: "agent_output", conversationId: "c1", turnId: 1, event: { kind: "diff", file: "a.ts", hunks: [{ type: "add", text: "x" }] } });
 
   const s = usePincerStore.getState();
-  const last = s.messages[s.messages.length - 1]!;
+  const last = s.messages[s.messages.length - 1];
+  if (!last) throw new Error("expected an assistant message");
   expect(last.role).toBe("assistant");
   expect(last.blocks).toEqual([
     { t: "tool", name: "Edit", detail: "a.ts" },

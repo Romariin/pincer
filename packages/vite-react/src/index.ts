@@ -105,7 +105,7 @@ export default function pincer(options?: { daemonUrl?: string; toggleKey?: strin
           children:
             "window.__PINCER__=" +
             JSON.stringify({
-              wsUrl: options?.daemonUrl ?? "ws://127.0.0.1:" + DEFAULT_PORT,
+              wsUrl: options?.daemonUrl ?? `ws://127.0.0.1:${DEFAULT_PORT}`,
               contractAVersion: CONTRACT_A_VERSION,
               projectRoot,
               toggleKey: options?.toggleKey ?? "Alt+Shift+P",

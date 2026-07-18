@@ -133,7 +133,8 @@ export class Orchestrator {
     if (config.effort !== undefined) patch.effort = config.effort;
     this.store.setConversationConfig(conversationId, patch);
     const row = this.store.getConversation(conversationId);
-    return { v: PROTOCOL_VERSION, type: "config_updated", conversation: this.toSummary(row!) };
+    if (!row) throw new Error("conversation vanished after config update");
+    return { v: PROTOCOL_VERSION, type: "config_updated", conversation: this.toSummary(row) };
   }
 
   deleteConversation(conversationId: string): ServerMessage {
@@ -167,7 +168,7 @@ export class Orchestrator {
       return;
     }
     const harness = this.harnessFor(conv.harness_id);
-    if (!harness || !harness.detected) {
+    if (!harness?.detected) {
       emit({ v: PROTOCOL_VERSION, type: "blocked", reason: "no_agent", message: NO_AGENT_HINT });
       return;
     }
@@ -273,10 +274,11 @@ export class Orchestrator {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buffer.indexOf("\n")) >= 0) {
+          let nl = buffer.indexOf("\n");
+          while (nl >= 0) {
             consume(buffer.slice(0, nl));
             buffer = buffer.slice(nl + 1);
+            nl = buffer.indexOf("\n");
           }
         }
       } finally {

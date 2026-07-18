@@ -5,7 +5,7 @@ import { place, type Rect } from "./picker";
 
 export interface PickerLayerState {
   hoverRect: Rect | null;
-  selectionRects: Rect[];
+  selectionRects: Array<{ id: number; rect: Rect }>;
 }
 
 /**
@@ -19,12 +19,13 @@ export function usePicker(): PickerLayerState {
   const selecting = usePincerStore((s) => s.selecting);
   const selections = usePincerStore((s) => s.selections);
   const [hoverRect, setHoverRect] = useState<Rect | null>(null);
-  const [selectionRects, setSelectionRects] = useState<Rect[]>([]);
+  const [selectionRects, setSelectionRects] = useState<Array<{ id: number; rect: Rect }>>([]);
 
   const recomputeSelections = useCallback(() => {
-    setSelectionRects(usePincerStore.getState().selections.map((s) => place(s.domEl)));
+    setSelectionRects(usePincerStore.getState().selections.map((s) => ({ id: s.id, rect: place(s.domEl) })));
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Selection changes require recomputing their live DOM rectangles.
   useEffect(() => {
     recomputeSelections();
   }, [selections, recomputeSelections]);

@@ -113,30 +113,30 @@ export const ompAdapter: AgentAdapter = {
       return null;
     }
 
-    const type = msg["type"];
+    const type = msg.type;
 
     if (type === "session") {
-      const id = typeof msg["id"] === "string" ? (msg["id"] as string) : undefined;
-      return { kind: "status", text: "omp session" + (id ? " " + id.slice(0, 8) : ""), sessionId: id };
+      const id = typeof msg.id === "string" ? (msg.id as string) : undefined;
+      return { kind: "status", text: `omp session${id ? ` ${id.slice(0, 8)}` : ""}`, sessionId: id };
     }
 
     if (type === "message_update") {
-      const event = msg["assistantMessageEvent"] as Record<string, unknown> | undefined;
-      if (event && event["type"] === "text_delta") {
-        return { kind: "text", text: String(event["delta"] ?? "") };
+      const event = msg.assistantMessageEvent as Record<string, unknown> | undefined;
+      if (event && event.type === "text_delta") {
+        return { kind: "text", text: String(event.delta ?? "") };
       }
       return null;
     }
 
     if (type === "tool_execution_start") {
-      const args = msg["args"] as Record<string, unknown> | undefined;
+      const args = msg.args as Record<string, unknown> | undefined;
       const detail =
-        args && typeof args["path"] === "string"
-          ? (args["path"] as string)
-          : args && typeof args["file"] === "string"
-            ? (args["file"] as string)
+        args && typeof args.path === "string"
+          ? (args.path as string)
+          : args && typeof args.file === "string"
+            ? (args.file as string)
             : undefined;
-      return { kind: "tool", name: String(msg["toolName"] ?? msg["name"] ?? "tool"), detail };
+      return { kind: "tool", name: String(msg.toolName ?? msg.name ?? "tool"), detail };
     }
 
     if (type === "agent_end") {

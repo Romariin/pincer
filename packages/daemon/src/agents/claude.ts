@@ -36,7 +36,7 @@ async function anthropicAuthHeaders(): Promise<Record<string, string> | null> {
     const creds = JSON.parse(await Bun.file(file).text()) as { claudeAiOauth?: { accessToken?: string } };
     const token = creds.claudeAiOauth?.accessToken;
     if (!token) return null;
-    headers["Authorization"] = `Bearer ${token}`;
+    headers.Authorization = `Bearer ${token}`;
     headers["anthropic-beta"] = "oauth-2025-04-20";
     return headers;
   } catch {
@@ -115,28 +115,28 @@ export const claudeAdapter: AgentAdapter = {
       return null;
     }
 
-    const type = msg["type"];
+    const type = msg.type;
 
-    if (type === "system" && msg["subtype"] === "init") {
-      const model = typeof msg["model"] === "string" ? ` (${msg["model"] as string})` : "";
-      return { kind: "status", text: "agent ready" + model };
+    if (type === "system" && msg.subtype === "init") {
+      const model = typeof msg.model === "string" ? ` (${msg.model as string})` : "";
+      return { kind: "status", text: `agent ready${model}` };
     }
 
     if (type === "stream_event") {
-      const event = msg["event"] as Record<string, unknown> | undefined;
+      const event = msg.event as Record<string, unknown> | undefined;
       if (!event) return null;
-      if (event["type"] === "content_block_delta") {
-        const delta = event["delta"] as Record<string, unknown> | undefined;
-        if (delta && delta["type"] === "text_delta") {
-          return { kind: "text", text: String(delta["text"] ?? "") };
+      if (event.type === "content_block_delta") {
+        const delta = event.delta as Record<string, unknown> | undefined;
+        if (delta && delta.type === "text_delta") {
+          return { kind: "text", text: String(delta.text ?? "") };
         }
       }
-      if (event["type"] === "content_block_start") {
-        const block = event["content_block"] as Record<string, unknown> | undefined;
-        if (block && block["type"] === "tool_use") {
-          const input = block["input"] as Record<string, unknown> | undefined;
-          const detail = input && typeof input["file_path"] === "string" ? (input["file_path"] as string) : undefined;
-          return { kind: "tool", name: String(block["name"] ?? "tool"), detail };
+      if (event.type === "content_block_start") {
+        const block = event.content_block as Record<string, unknown> | undefined;
+        if (block && block.type === "tool_use") {
+          const input = block.input as Record<string, unknown> | undefined;
+          const detail = input && typeof input.file_path === "string" ? (input.file_path as string) : undefined;
+          return { kind: "tool", name: String(block.name ?? "tool"), detail };
         }
       }
       return null;
@@ -145,9 +145,9 @@ export const claudeAdapter: AgentAdapter = {
     if (type === "result") {
       return {
         kind: "result",
-        success: msg["is_error"] !== true,
-        sessionId: typeof msg["session_id"] === "string" ? (msg["session_id"] as string) : null,
-        summary: String(msg["result"] ?? "").slice(0, 500),
+        success: msg.is_error !== true,
+        sessionId: typeof msg.session_id === "string" ? (msg.session_id as string) : null,
+        summary: String(msg.result ?? "").slice(0, 500),
       };
     }
 

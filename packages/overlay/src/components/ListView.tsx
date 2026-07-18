@@ -27,24 +27,26 @@ function Row({ c }: { c: ConversationSummary }): ReactNode {
   const send = usePincerStore((s) => s.send);
   const setView = usePincerStore((s) => s.setView);
   const info = harnessInfo(harnessMap, c.harnessId);
+  const openConversation = (): void => {
+    if (c.id === conversationId) setView("chat");
+    else send({ v: PROTOCOL_VERSION, type: "resume_conversation", conversationId: c.id });
+  };
 
   return (
     <div
       className="group flex cursor-pointer items-center gap-[11px] rounded-[9px] p-2.5 transition-colors hover:bg-muted"
-      onClick={() => {
-        if (c.id === conversationId) setView("chat");
-        else send({ v: PROTOCOL_VERSION, type: "resume_conversation", conversationId: c.id });
-      }}
     >
-      <Avatar info={info} size={28} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13.5px] text-foreground/90">
-          {c.title?.trim() || "New conversation"}
+      <button type="button" className="flex min-w-0 flex-1 items-center gap-[11px] text-left" onClick={openConversation}>
+        <Avatar info={info} size={28} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13.5px] text-foreground/90">
+            {c.title?.trim() || "New conversation"}
+          </div>
+          <div className="mt-0.5 text-[11.5px] text-muted-foreground">
+            {c.turnCount ? `${info.label} · ${modelLabel(info, c.model)}` : "No messages yet"}
+          </div>
         </div>
-        <div className="mt-0.5 text-[11.5px] text-muted-foreground">
-          {c.turnCount ? `${info.label} · ${modelLabel(info, c.model)}` : "No messages yet"}
-        </div>
-      </div>
+      </button>
       <Button
         variant="ghost"
         size="icon"
@@ -80,7 +82,9 @@ export function ListView(): ReactNode {
   const groups: Record<string, ConversationSummary[]> = {};
   for (const c of conversations) {
     const g = groupLabel(c.updatedAt);
-    (groups[g] ??= []).push(c);
+    const group = groups[g] ?? [];
+    group.push(c);
+    groups[g] = group;
   }
 
   return (

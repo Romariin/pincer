@@ -25,6 +25,7 @@ export interface Cfg {
 }
 
 export interface Msg {
+  id: number;
   role: "user" | "assistant" | "system";
   blocks: MessageBlock[];
   /** Command-bar config captured when an assistant turn began (drives the meta badge). */
@@ -34,6 +35,7 @@ export interface Msg {
 }
 
 export interface Selection {
+  id: number;
   domEl: HTMLElement;
   source: SourceLocation | null;
   domContext: DomContext;
@@ -47,6 +49,13 @@ export interface PendingPrompt {
 }
 
 const DEFAULT_EFFORTS = ["Minimal", "Low", "Medium", "High", "Max"];
+let nextMessageId = 0;
+let nextSelectionId = 0;
+
+function createMessageId(): number {
+  nextMessageId += 1;
+  return nextMessageId;
+}
 
 export interface PincerStore {
   // ---- connection / view ----
@@ -114,7 +123,7 @@ export function computeCfg(s: PincerStore): Cfg {
 }
 
 function userMsg(text: string, count: number): Msg {
-  return { role: "user", blocks: [{ t: "md", text }], elementCount: count };
+  return { id: createMessageId(), role: "user", blocks: [{ t: "md", text }], elementCount: count };
 }
 
 export const usePincerStore = create<PincerStore>()((set, get) => {
@@ -150,7 +159,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 
   const beginAssistant = (): void => {
     set((s) => ({
-      messages: [...s.messages, { role: "assistant", blocks: [], meta: computeCfg(s) }],
+      messages: [...s.messages, { id: createMessageId(), role: "assistant", blocks: [], meta: computeCfg(s) }],
       streamingIndex: s.messages.length,
     }));
   };
@@ -171,7 +180,9 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
   // System note: only surfaced in chat view (mirrors the old sysNote early-return).
   const sysNote = (text: string): void => {
     if (get().view !== "chat") return;
-    set((s) => ({ messages: [...s.messages, { role: "system", blocks: [{ t: "md", text }] }] }));
+    set((s) => ({
+      messages: [...s.messages, { id: createMessageId(), role: "system", blocks: [{ t: "md", text }] }],
+    }));
   };
 
   return {
@@ -258,7 +269,13 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
         set({ selections: s.selections.filter((sel) => sel.domEl !== node) });
         return;
       }
-      const sel: Selection = { domEl: node, source: resolveSource(node), domContext: buildDomContext(node) };
+      nextSelectionId += 1;
+      const sel: Selection = {
+        id: nextSelectionId,
+        domEl: node,
+        source: resolveSource(node),
+        domContext: buildDomContext(node),
+      };
       set({ selections: [...s.selections, sel] });
     },
     removeSelection: (domEl) => set((s) => ({ selections: s.selections.filter((sel) => sel.domEl !== domEl) })),
@@ -313,7 +330,9 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
           const messages: Msg[] = [];
           for (const t of msg.turns) {
             messages.push(userMsg(t.prompt, 0));
-            if (t.blocks.length) messages.push({ role: "assistant", blocks: t.blocks, meta: cfg });
+            if (t.blocks.length) {
+              messages.push({ id: createMessageId(), role: "assistant", blocks: t.blocks, meta: cfg });
+            }
           }
           set({
             conversationId: id,
