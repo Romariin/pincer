@@ -1,42 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { connect } from "node:net";
 import { isLocalOrigin } from "../src/server";
 import { createHarness, type Harness } from "./harness";
 
-let harness: Harness | undefined;
+let h: Harness | undefined;
 
 afterEach(async () => {
-  await harness?.close();
-  harness = undefined;
+  await h?.close();
+  h = undefined;
 });
 
-function websocketUpgrade(port: number, origin: string): Promise<string> {
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
-  const socket = connect({ host: "127.0.0.1", port }, () => {
-    socket.write(
-      [
-        "GET / HTTP/1.1",
-        `Host: 127.0.0.1:${port}`,
-        "Connection: Upgrade",
-        "Upgrade: websocket",
-        `Origin: ${origin}`,
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-        "Sec-WebSocket-Version: 13",
-        "",
-        "",
-      ].join("\r\n"),
-    );
-  });
-  socket.setEncoding("utf8");
-  socket.once("data", (response) => {
-    socket.destroy();
-    resolve(String(response));
-  });
-  socket.once("error", reject);
-  return promise;
-}
-
-test("allows loopback browser origins and local non-browser clients", () => {
+test("isLocalOrigin allows localhost variants and non-browser clients", () => {
   expect(isLocalOrigin(null)).toBe(true);
   expect(isLocalOrigin("http://localhost:5173")).toBe(true);
   expect(isLocalOrigin("http://127.0.0.1:7392")).toBe(true);
@@ -44,16 +17,16 @@ test("allows loopback browser origins and local non-browser clients", () => {
   expect(isLocalOrigin("http://[::1]:3000")).toBe(true);
 });
 
-test("rejects remote and lookalike browser origins", () => {
+test("isLocalOrigin rejects non-local and lookalike origins", () => {
   expect(isLocalOrigin("https://evil.example")).toBe(false);
   expect(isLocalOrigin("http://localhost.evil.example")).toBe(false);
   expect(isLocalOrigin("http://127.0.0.1.evil.example")).toBe(false);
   expect(isLocalOrigin("null")).toBe(false);
 });
 
-test("daemon rejects a WebSocket upgrade from a remote origin", async () => {
-  harness = await createHarness();
-  const response = await fetch(`http://127.0.0.1:${harness.port}/`, {
+test("daemon refuses a WebSocket upgrade from a non-local origin", async () => {
+  h = await createHarness();
+  const res = await fetch(`http://127.0.0.1:${h.port}/`, {
     headers: {
       connection: "Upgrade",
       upgrade: "websocket",
@@ -62,11 +35,25 @@ test("daemon rejects a WebSocket upgrade from a remote origin", async () => {
       "sec-websocket-version": "13",
     },
   });
-  expect(response.status).toBe(403);
+  expect(res.status).toBe(403);
 });
 
+// Bun's WebSocket accepts a { headers } option (needed to simulate a browser
+// Origin) that the DOM constructor type does not declare.
+const BunWebSocket = WebSocket as unknown as new (
+  url: string,
+  opts?: { headers?: Record<string, string> },
+) => WebSocket;
+
 test("daemon accepts a WebSocket upgrade from a localhost origin", async () => {
-  harness = await createHarness();
-  const response = await websocketUpgrade(harness.port, "http://localhost:5173");
-  expect(response.startsWith("HTTP/1.1 101")).toBe(true);
+  h = await createHarness();
+  const ws = new BunWebSocket(`ws://127.0.0.1:${h.port}`, {
+    headers: { origin: "http://localhost:5173" },
+  });
+  const opened = await new Promise<boolean>((resolve) => {
+    ws.addEventListener("open", () => resolve(true), { once: true });
+    ws.addEventListener("error", () => resolve(false), { once: true });
+  });
+  ws.close();
+  expect(opened).toBe(true);
 });

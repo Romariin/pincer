@@ -28,7 +28,7 @@ so any change is revertable, acceptable (merge to base), or discardable.
 
 Two ways to get the overlay into your app:
 
-- **`pincer dev` (zero install)** — wraps your dev server behind an injection
+- **`pincer -- <command>` (zero install)** — wraps your dev server behind an injection
   proxy; nothing to add to the app. Source resolution falls back to DOM context
   + agent search.
 - **Framework plugin** (`@pincer/vite-react`, react-grab style) — installed in
@@ -36,7 +36,7 @@ Two ways to get the overlay into your app:
   maximum precision.
 
 ```sh
-# From any Git-backed app, run its existing dev command through Pincer:
+# From any Git-backed app:
 pincer -- bun run dev
 
 # Or use this repository's compiled binary against the demo:
@@ -55,21 +55,17 @@ bun run build:daemon       # produce ./dist/pincer
 cd examples/demo && bun run dev
 ```
 
-Pincer starts the daemon and child dev server, detects the child's local URL,
-then prints a proxy URL to open. The proxy injects the overlay and forwards HTTP
-and HMR WebSocket traffic, so per-app Pincer setup is not required. Pass
-`--target http://localhost:<port>` to skip detection and optionally front an
-already-running server without a child command. The daemon only binds
-`127.0.0.1` and rejects WebSocket connections from non-localhost browser
-origins. Adding `@pincer/vite-react` remains an optional precision upgrade for
-exact JSX source locations; without it, Pincer uses DOM context and agent
-search.
+`pincer -- <command>` auto-detects the dev server URL from its output; pass
+`--target http://localhost:<port>` to skip detection (with `--target` you can
+also omit the command entirely and front an already-running server). The daemon
+only binds `127.0.0.1` and rejects WebSocket connections from non-localhost
+browser origins.
 
-Open the printed Pincer proxy URL and use the floating crab launcher or press `Alt+Shift+P`
-(`Option+Shift+P` on macOS). Open the Settings gear to choose one shortcut for
-every Pincer app or hide the launcher for the current app and site. Pincer keeps
-history, CLI sessions, and settings under `~/.pincer`, automatically migrates
-legacy project-local data, and requires no project `.gitignore` entry.
+Open the printed Pincer proxy URL and use the floating crab launcher or press
+`Alt+Shift+P` (`Option+Shift+P` on macOS). Open Settings to choose one shortcut
+for every Pincer app or hide the launcher for the current app and site. Pincer
+keeps history, CLI sessions, and settings under `~/.pincer`, automatically
+migrates legacy project-local data, and requires no project `.gitignore` entry.
 
 ## Bun runtime note for the optional `@pincer/vite-react` plugin
 

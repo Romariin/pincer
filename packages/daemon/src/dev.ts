@@ -5,17 +5,27 @@ import { isLocalOrigin, startDaemon, type RunningDaemon } from "./server";
 import { stopProcessTree } from "./processTree";
 
 /**
- * Wraps an app's dev server behind an injection proxy so `pincer -- <command>`
- * works without per-app setup. HTML receives the overlay config and loader;
- * all other HTTP and HMR WebSocket traffic passes through to the app server.
- * Framework plugins remain an optional source-location precision upgrade.
+ * `pincer -- <cmd>`: wraps the app's own dev server behind an injection
+ * proxy so the overlay works with zero per-app install. The proxy rewrites
+ * HTML responses to add the `window.__PINCER__` config and the overlay loader
+ * (same two tags the Vite plugin injects), serves the overlay bundle at
+ * `/__pincer/overlay.js`, and pipes everything else — including HMR
+ * WebSockets — through to the wrapped server untouched.
+ *
+ * Without the framework plugin there are no `data-pincer-source` attributes,
+ * so source resolution falls back to DOM context + agent search (Contract A
+ * stays a precision upgrade, not a requirement).
  */
+
 export interface DevProxyOptions {
+  /** Upstream dev server base URL, e.g. `http://localhost:5173`. */
   target: string;
+  /** Port the proxy listens on (0 = random). */
   port: number;
+  /** Daemon WebSocket URL injected into the page config. */
   wsUrl: string;
   projectRoot: string;
-  log?: (message: string) => void;
+  log?: (msg: string) => void;
 }
 
 export interface RunningProxy {
@@ -38,17 +48,17 @@ function overlayResponse(): Response {
 }
 
 export function injectHtml(html: string, config: Record<string, unknown>): string {
+  // <-escape so a "</script>" inside a config value cannot break out of the tag.
   const json = JSON.stringify(config).replace(/</g, "\\u003c");
-  const configScript = `<script>window.__PINCER__=${json}</script>`;
-  const loader = '<script type="module" src="/__pincer/overlay.js"></script>';
-  let output = html.includes("</head>")
-    ? html.replace("</head>", `${configScript}</head>`)
-    : configScript + html;
-  output = output.includes("</body>")
-    ? output.replace("</body>", `${loader}</body>`)
-    : output + loader;
-  return output;
+  const cfg = `<script>window.__PINCER__=${json}</script>`;
+  const loader = `<script type="module" src="/__pincer/overlay.js"></script>`;
+  let out = html;
+  out = out.includes("</head>") ? out.replace("</head>", `${cfg}</head>`) : cfg + out;
+  out = out.includes("</body>") ? out.replace("</body>", `${loader}</body>`) : out + loader;
+  return out;
 }
+
+/** Close codes 1005/1006/1015 are reserved "never sent on the wire" values. */
 function forwardableCloseCode(code: number): number {
   return code >= 1000 && code <= 4999 && code !== 1005 && code !== 1006 && code !== 1015
     ? code
@@ -62,21 +72,25 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
     wsUrl: opts.wsUrl,
     contractAVersion: CONTRACT_A_VERSION,
     projectRoot: opts.projectRoot,
-
   };
 
   const server = Bun.serve<ProxyWsData>({
     hostname: "127.0.0.1",
     port: opts.port,
-    async fetch(req, bunServer) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
+
       if (url.pathname === "/__pincer/overlay.js") return overlayResponse();
 
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         const origin = req.headers.get("origin");
-        if (!isLocalOrigin(origin)) return new Response("forbidden origin", { status: 403 });
+        if (!isLocalOrigin(origin)) {
+          return new Response("forbidden origin", { status: 403 });
+        }
+        // A client may offer several subprotocols but the upgrade response must
+        // name exactly one; forward only the first offer to the upstream.
         const protocol = req.headers.get("sec-websocket-protocol")?.split(",")[0]?.trim();
-        const upgraded = bunServer.upgrade(req, {
+        const upgraded = srv.upgrade(req, {
           data: {
             targetUrl: wsTargetBase + url.pathname + url.search,
             protocol,
@@ -91,7 +105,8 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
 
       const headers = new Headers(req.headers);
       headers.delete("host");
-
+      // Ask the upstream for an identity body so HTML can be rewritten without
+      // re-encoding; other content is streamed through as-is.
       headers.delete("accept-encoding");
 
       let upstream: Response;
@@ -106,22 +121,24 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
         return new Response(`pincer: dev server unreachable at ${opts.target}`, { status: 502 });
       }
 
-      const responseHeaders = new Headers(upstream.headers);
-      responseHeaders.delete("content-length");
-      responseHeaders.delete("content-encoding");
-      responseHeaders.delete("transfer-encoding");
+      const respHeaders = new Headers(upstream.headers);
+      respHeaders.delete("content-length");
+      respHeaders.delete("content-encoding");
+      respHeaders.delete("transfer-encoding");
 
-      if ((upstream.headers.get("content-type") ?? "").includes("text/html")) {
-        return new Response(injectHtml(await upstream.text(), pageConfig), {
+      const contentType = upstream.headers.get("content-type") ?? "";
+      if (contentType.includes("text/html")) {
+        const html = await upstream.text();
+        return new Response(injectHtml(html, pageConfig), {
           status: upstream.status,
           statusText: upstream.statusText,
-          headers: responseHeaders,
+          headers: respHeaders,
         });
       }
       return new Response(upstream.body, {
         status: upstream.status,
         statusText: upstream.statusText,
-        headers: responseHeaders,
+        headers: respHeaders,
       });
     },
     websocket: {
@@ -130,7 +147,7 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
         ws.data.upstream = upstream;
         upstream.binaryType = "arraybuffer";
         upstream.onopen = () => {
-          for (const message of ws.data.pending) upstream.send(message);
+          for (const m of ws.data.pending) upstream.send(m);
           ws.data.pending = [];
         };
         upstream.onmessage = (event) => {
@@ -140,13 +157,17 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
             ws.send(new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength));
           }
         };
-        upstream.onclose = (event) => ws.close(forwardableCloseCode(event.code), event.reason);
-        upstream.onerror = () => ws.close(1011, "upstream websocket error");
+        upstream.onclose = (ev) => {
+          ws.close(forwardableCloseCode(ev.code), ev.reason);
+        };
+        upstream.onerror = () => {
+          ws.close(1011, "upstream websocket error");
+        };
       },
-      message(ws: ServerWebSocket<ProxyWsData>, message: string | Buffer) {
-        const payload = typeof message === "string" ? message : new Uint8Array(message);
+      message(ws: ServerWebSocket<ProxyWsData>, msg: string | Buffer) {
+        const payload = typeof msg === "string" ? msg : new Uint8Array(msg);
         const upstream = ws.data.upstream;
-        if (upstream?.readyState === WebSocket.OPEN) upstream.send(payload);
+        if (upstream && upstream.readyState === WebSocket.OPEN) upstream.send(payload);
         else ws.data.pending.push(payload);
       },
       close(ws: ServerWebSocket<ProxyWsData>, code: number, reason: string) {
@@ -170,18 +191,23 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
   };
 }
 
-const LOCAL_URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?/i;
+// ---------------------------------------------------------------------------
+// Child dev-server spawning + local URL detection
+// ---------------------------------------------------------------------------
+
+const LOCAL_URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(?::\d+)?/i;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes are control chars by definition.
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 
 export function findLocalUrl(text: string): string | null {
   const match = text.replace(ANSI_RE, "").match(LOCAL_URL_RE);
-  return match?.[0].replace("0.0.0.0", "127.0.0.1") ?? null;
+  if (!match) return null;
+  return match[0].replace("0.0.0.0", "127.0.0.1");
 }
 
 interface SpawnedDev {
   child: Subprocess<"inherit", "pipe", "pipe">;
-
+  /** Resolves with the first local URL the child prints; rejects if it exits first. */
   detectedTarget: Promise<string>;
 }
 
@@ -196,13 +222,16 @@ function spawnDevServer(command: string[], cwd: string): SpawnedDev {
     stderr: "pipe",
   });
 
-  let resolveTarget!: (url: string) => void;
-  let rejectTarget!: (error: Error) => void;
+  let resolveTarget: (url: string) => void;
+  let rejectTarget: (err: Error) => void;
   const detectedTarget = new Promise<string>((resolve, reject) => {
     resolveTarget = resolve;
     rejectTarget = reject;
   });
+
   let found = false;
+  // Rolling buffer so a URL split across chunks still matches; capped since we
+  // only ever need the tail.
   let scanned = "";
   const scan = (text: string): void => {
     if (found) return;
@@ -227,28 +256,31 @@ function spawnDevServer(command: string[], cwd: string): SpawnedDev {
       scan(decoder.decode(value, { stream: true }));
     }
   };
-  void tee(child.stdout, (chunk) => process.stdout.write(chunk));
-  void tee(child.stderr, (chunk) => process.stderr.write(chunk));
+  void tee(child.stdout, (c) => process.stdout.write(c));
+  void tee(child.stderr, (c) => process.stderr.write(c));
+
   void child.exited.then((code) => {
-    if (!found) {
-      rejectTarget(new Error(`dev command exited with code ${code} before printing a local URL`));
-    }
+    if (!found) rejectTarget(new Error(`dev command exited with code ${code} before printing a local URL`));
   });
 
   return { child, detectedTarget };
 }
 
+// ---------------------------------------------------------------------------
+// `pincer dev` orchestration
+// ---------------------------------------------------------------------------
 
 export interface DevOptions {
   projectRoot: string;
   daemonPort: number;
   proxyPort: number;
   command: string[];
+  /** Skip URL detection and proxy straight to this upstream. */
   target?: string;
   agentId?: string;
   agentCommand?: string[];
   dataRoot?: string;
-  log: (message: string) => void;
+  log: (msg: string) => void;
 }
 
 export async function runDev(opts: DevOptions): Promise<void> {
@@ -260,11 +292,12 @@ export async function runDev(opts: DevOptions): Promise<void> {
     dataRoot: opts.dataRoot,
     log: opts.log,
   });
-  opts.log(
-    `daemon on ws://127.0.0.1:${daemon.port}, project ${opts.projectRoot}, agent ${daemon.orchestrator.agentId ?? "none"}`,
-  );
+  opts.log(`daemon on ws://127.0.0.1:${daemon.port}, project ${opts.projectRoot}, agent ${daemon.orchestrator.agentId ?? "none"}`);
 
+  // With an explicit --target and no command, pincer only fronts an already
+  // running dev server.
   const spawned = opts.command.length > 0 ? spawnDevServer(opts.command, opts.projectRoot) : null;
+
   let proxy: RunningProxy | undefined;
   let shutdownPromise: Promise<never> | null = null;
   const shutdown = (code: number): Promise<never> => {
@@ -283,41 +316,41 @@ export async function runDev(opts: DevOptions): Promise<void> {
   process.once("SIGTERM", () => void shutdown(0));
   if (spawned) void spawned.child.exited.then((code) => void shutdown(code));
 
-  let target!: string;
-  if (opts.target) target = opts.target;
-  else if (!spawned) {
+  let target: string;
+  if (opts.target) {
+    target = opts.target;
+  } else if (!spawned) {
     opts.log("nothing to proxy: pass a command after -- or an explicit --target");
     await shutdown(1);
+    return;
   } else {
     const hint = setTimeout(() => {
-      opts.log(
-        "still waiting for the dev server to print a local URL — pass --target http://localhost:<port> to skip detection",
-      );
+      opts.log("still waiting for the dev server to print a local URL — pass --target http://localhost:<port> to skip detection");
     }, 15_000);
     try {
       target = await spawned.detectedTarget;
-    } catch (error) {
+    } catch (err) {
       clearTimeout(hint);
-      opts.log(error instanceof Error ? error.message : String(error));
+      opts.log(err instanceof Error ? err.message : String(err));
       await shutdown(1);
+      return;
     }
     clearTimeout(hint);
   }
 
-  let runningProxy!: RunningProxy;
   try {
-    runningProxy = startDevProxy({
+    proxy = startDevProxy({
       target,
       port: opts.proxyPort,
       wsUrl: `ws://127.0.0.1:${daemon.port}`,
       projectRoot: opts.projectRoot,
       log: opts.log,
     });
-  } catch (error) {
-    opts.log(error instanceof Error ? error.message : String(error));
+  } catch (err) {
+    opts.log(err instanceof Error ? err.message : String(err));
     await shutdown(1);
+    return;
   }
-  proxy = runningProxy;
 
-  console.log(`\n  pincer ready → open http://localhost:${runningProxy.port}  (proxying ${target})\n`);
+  console.log(`\n  pincer ready → open http://localhost:${proxy.port}  (proxying ${target})\n`);
 }
