@@ -149,12 +149,10 @@ if (proxyMode) {
   console.log(
     `pincer listening on ws://127.0.0.1:${daemon.port}, project ${projectRoot}, agent ${daemon.orchestrator.agentId ?? "none"}`,
   );
-  process.on("SIGINT", () => {
-    daemon.stop();
+  const shutdown = async (): Promise<never> => {
+    await daemon.stop();
     process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    daemon.stop();
-    process.exit(0);
-  });
+  };
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +41,7 @@ test("pincer -- <command> launches the app through the injection proxy", async (
   const cli = join(import.meta.dir, "../src/cli.ts");
   const fakeDevServer = join(import.meta.dir, "fixtures/fake-dev-server.ts");
   const fakeClaude = join(import.meta.dir, "fixtures/fake-claude.ts");
+  const descendantPidFile = join(home, "descendant.pid");
   const git = Bun.spawnSync(["git", "init", "-b", "main"], { cwd: projectRoot });
   if (git.exitCode !== 0) throw new Error(git.stderr.toString());
 
@@ -64,12 +65,13 @@ test("pincer -- <command> launches the app through the injection proxy", async (
       "3000",
     ],
     cwd: projectRoot,
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, PINCER_FAKE_DESCENDANT_PID_FILE: descendantPidFile },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
 
+  let descendantPid: number | null = null;
   try {
     const proxyPort = await waitForProxyUrl(child.stdout, child.exited);
     const html = await (await fetch(`http://127.0.0.1:${proxyPort}/`)).text();
@@ -79,9 +81,24 @@ test("pincer -- <command> launches the app through the injection proxy", async (
     expect(html).toContain('src="/__pincer/overlay.js"');
     expect(existsSync(join(home, ".pincer", "settings.db"))).toBe(true);
     expect(existsSync(join(projectRoot, ".pincer"))).toBe(false);
+    descendantPid = Number(readFileSync(descendantPidFile, "utf8"));
+    expect(Number.isInteger(descendantPid)).toBe(true);
+
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(0);
+    expect(() => process.kill(descendantPid ?? 0, 0)).toThrow();
   } finally {
-    child.kill();
-    await child.exited;
+    if (child.exitCode === null) {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+    if (descendantPid !== null) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch {
+        // The expected path: Pincer already terminated the full process tree.
+      }
+    }
     rmSync(projectRoot, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }

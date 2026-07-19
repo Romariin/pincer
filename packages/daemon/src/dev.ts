@@ -2,6 +2,7 @@ import overlayBundle from "@pincer/overlay/dist/overlay.js" with { type: "text" 
 import type { Server, ServerWebSocket, Subprocess } from "bun";
 import { CONTRACT_A_VERSION } from "@pincer/core";
 import { isLocalOrigin, startDaemon, type RunningDaemon } from "./server";
+import { stopProcessTree } from "./processTree";
 
 /**
  * Wraps an app's dev server behind an injection proxy so `pincer -- <command>`
@@ -187,6 +188,7 @@ function spawnDevServer(command: string[], cwd: string): SpawnedDev {
     cmd: command,
     cwd,
     env: { ...process.env, FORCE_COLOR: "1" },
+    detached: process.platform !== "win32",
     stdin: "inherit",
     stdout: "pipe",
     stderr: "pipe",
@@ -260,27 +262,28 @@ export async function runDev(opts: DevOptions): Promise<void> {
 
   const spawned = opts.command.length > 0 ? spawnDevServer(opts.command, opts.projectRoot) : null;
   let proxy: RunningProxy | undefined;
-  const shutdown = (code: number): never => {
-    proxy?.stop();
-    spawned?.child.kill();
-    daemon.stop();
-    process.exit(code);
-  };
-  process.on("SIGINT", () => shutdown(0));
-  process.on("SIGTERM", () => shutdown(0));
-  if (spawned) {
-    void spawned.child.exited.then((code) => {
+  let shutdownPromise: Promise<never> | null = null;
+  const shutdown = (code: number): Promise<never> => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
       proxy?.stop();
-      daemon.stop();
+      await Promise.all([
+        spawned ? stopProcessTree(spawned.child) : Promise.resolve(),
+        daemon.stop(),
+      ]);
       process.exit(code);
-    });
-  }
+    })();
+    return shutdownPromise;
+  };
+  process.once("SIGINT", () => void shutdown(0));
+  process.once("SIGTERM", () => void shutdown(0));
+  if (spawned) void spawned.child.exited.then((code) => void shutdown(code));
 
   let target!: string;
   if (opts.target) target = opts.target;
   else if (!spawned) {
     opts.log("nothing to proxy: pass a command after -- or an explicit --target");
-    shutdown(1);
+    await shutdown(1);
   } else {
     const hint = setTimeout(() => {
       opts.log(
@@ -292,7 +295,7 @@ export async function runDev(opts: DevOptions): Promise<void> {
     } catch (error) {
       clearTimeout(hint);
       opts.log(error instanceof Error ? error.message : String(error));
-      shutdown(1);
+      await shutdown(1);
     }
     clearTimeout(hint);
   }
@@ -308,7 +311,7 @@ export async function runDev(opts: DevOptions): Promise<void> {
     });
   } catch (error) {
     opts.log(error instanceof Error ? error.message : String(error));
-    shutdown(1);
+    await shutdown(1);
   }
   proxy = runningProxy;
 

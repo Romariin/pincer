@@ -172,12 +172,12 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     },
     async restart() {
       ws.close();
-      daemon.stop();
+      await daemon.stop();
       await connect();
     },
     async close() {
       ws.close();
-      daemon.stop();
+      await daemon.stop();
       rmSync(dir, { recursive: true, force: true });
       if (ownsDataRoot) rmSync(dataRoot, { recursive: true, force: true });
     },

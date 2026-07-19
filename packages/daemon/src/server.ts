@@ -50,7 +50,7 @@ export interface RunningDaemon {
   server: Server<undefined>;
   port: number;
   orchestrator: Orchestrator;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
@@ -122,14 +122,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     },
   });
 
+  let stopPromise: Promise<void> | null = null;
+
   return {
     server,
     port: server.port ?? opts.port,
     orchestrator,
     stop() {
-      server.stop(true);
-      store.close();
-      settingsStore.close();
+      if (stopPromise) return stopPromise;
+      stopPromise = (async () => {
+        await orchestrator.stop();
+        server.stop(true);
+        store.close();
+        settingsStore.close();
+      })();
+      return stopPromise;
     },
   };
 }

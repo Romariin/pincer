@@ -95,6 +95,7 @@ export class Store {
       /* column already present */
     }
     this.db.query("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run();
+    this.db.query("UPDATE turns SET status = 'error' WHERE status = 'running'").run();
   }
 
   close(): void {

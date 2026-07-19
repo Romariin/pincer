@@ -167,6 +167,25 @@ test("cancel kills the running turn and leaves the file unchanged", async () => 
   expect(turn.status).toBe("cancelled");
 });
 
+test("daemon shutdown cancels an active Claude turn before closing history", async () => {
+  h = await createHarness({ agentCommand: ["bun", FAKE_CLAUDE_SLOW] });
+  const convId = await startConversation(h);
+  h.send({
+    v: V,
+    type: "prompt",
+    conversationId: convId,
+    prompt: h.userPrompt,
+    source: h.source,
+    domContext: h.domContext,
+  });
+  await h.next("turn_started");
+
+  await h.restart();
+
+  expect(lastTurnRow(h, convId).status).toBe("cancelled");
+  expect(h.readTarget()).not.toContain("PINCER_EDIT_MARKER");
+});
+
 test("a second turn resumes the prior agent session", async () => {
   h = await createHarness();
   const convId = await startConversation(h);
@@ -176,6 +195,31 @@ test("a second turn resumes the prior agent session", async () => {
   const record = h.readRecord();
   expect(record).toContain("--resume");
   expect(record).toContain("sess-1");
+});
+
+test("restart skips an interrupted turn and resumes the last completed Claude session", async () => {
+  h = await createHarness();
+  const convId = await startConversation(h);
+  await runTurn(h, convId, "completed change");
+
+  const db = new Database(h.historyDbPath);
+  try {
+    db.query(
+      `INSERT INTO turns
+        (conversation_id, seq, prompt, source, dom_context, agent_session_id,
+         checkpoint, parent_checkpoint, output, blocks, status, created_at)
+       VALUES (?, 2, 'interrupted', NULL, '{}', NULL, NULL, NULL, NULL, NULL, 'running', ?)`,
+    ).run(convId, Date.now());
+  } finally {
+    db.close();
+  }
+
+  await h.restart();
+  expect(lastTurnRow(h, convId).status).toBe("error");
+
+  await runTurn(h, convId, "after restart");
+  expect(h.readRecord()).toContain("--resume");
+  expect(h.readRecord()).toContain("sess-1");
 });
 
 test("history survives a daemon restart", async () => {
