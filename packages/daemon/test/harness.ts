@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DomContext, ServerMessage, SourceLocation } from "@pincer/core";
 import { startDaemon, type RunningDaemon } from "../src/server";
+import { projectDataDir } from "../src/paths";
 
 export interface HarnessOptions {
   agentId?: string;
   agentCommand?: string[];
+  dataRoot?: string;
+  seedLegacyData?: boolean;
 }
 
 interface Waiter {
@@ -17,6 +20,9 @@ interface Waiter {
 
 export interface Harness {
   dir: string;
+  dataRoot: string;
+  pincerDataDir: string;
+  historyDbPath: string;
   targetRel: string;
   targetAbs: string;
   appendText: string;
@@ -48,6 +54,10 @@ function git(dir: string, args: string[]): string {
 
 export async function createHarness(opts: HarnessOptions = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "pincer-test-"));
+  const ownsDataRoot = opts.dataRoot === undefined;
+  const dataRoot = opts.dataRoot ?? mkdtempSync(join(tmpdir(), "pincer-data-test-"));
+  const pincerDataDir = projectDataDir(dir, dataRoot);
+  const historyDbPath = join(pincerDataDir, "history.db");
 
   git(dir, ["init", "-b", "main"]);
   git(dir, ["config", "user.email", "pincer@example.com"]);
@@ -58,9 +68,14 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
   const targetAbs = join(dir, targetRel);
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(targetAbs, `export function App() {\n  return <button className="btn">Submit</button>;\n}\n`);
-  writeFileSync(join(dir, ".gitignore"), ".pincer/\nnode_modules/\nfake-record.json\n");
+  writeFileSync(join(dir, ".gitignore"), "node_modules/\nfake-record.json\n");
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "--no-verify", "-m", "initial"]);
+  if (opts.seedLegacyData) {
+    const legacyDir = join(dir, ".pincer");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, "legacy-marker"), "legacy");
+  }
 
   const recordFile = join(dir, "fake-record.json");
   const appendText = "\n// PINCER_EDIT_MARKER\n";
@@ -93,7 +108,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
   };
 
   const connect = async (): Promise<void> => {
-    daemon = await startDaemon({ projectRoot: dir, port: 0, agentId, agentCommand });
+    daemon = await startDaemon({ projectRoot: dir, port: 0, agentId, agentCommand, dataRoot });
     buffered.length = 0;
     waiters.length = 0;
     ws = new WebSocket(`ws://127.0.0.1:${daemon.port}`);
@@ -124,6 +139,9 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
 
   return {
     dir,
+    dataRoot,
+    pincerDataDir,
+    historyDbPath,
     targetRel,
     targetAbs,
     appendText,
@@ -161,6 +179,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
       ws.close();
       daemon.stop();
       rmSync(dir, { recursive: true, force: true });
+      if (ownsDataRoot) rmSync(dataRoot, { recursive: true, force: true });
     },
   };
 }

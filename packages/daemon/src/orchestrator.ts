@@ -23,6 +23,7 @@ export interface OrchestratorDeps {
   git: Git;
   store: Store;
   projectRoot: string;
+  pincerDataDir: string;
   harnesses: ResolvedHarness[];
   log?: (msg: string) => void;
 }
@@ -44,6 +45,7 @@ export class Orchestrator {
   private readonly git: Git;
   private readonly store: Store;
   private readonly projectRoot: string;
+  private readonly pincerDataDir: string;
   private readonly harnesses: ResolvedHarness[];
   private readonly log: (msg: string) => void;
 
@@ -54,6 +56,7 @@ export class Orchestrator {
     this.git = deps.git;
     this.store = deps.store;
     this.projectRoot = deps.projectRoot;
+    this.pincerDataDir = deps.pincerDataDir;
     this.harnesses = deps.harnesses;
     this.log = deps.log ?? (() => {});
   }
@@ -203,6 +206,7 @@ export class Orchestrator {
       domContext,
       elements,
       projectRoot: this.projectRoot,
+      pincerDataDir: this.pincerDataDir,
       conversationId,
       resumeSessionId,
       model: conv.model || null,

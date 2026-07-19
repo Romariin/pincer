@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { PROTOCOL_VERSION } from "@pincer/core";
+import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
 import type {
   ClientMessage,
   ServerMessage,
@@ -8,6 +8,7 @@ import type {
   DomContext,
   HarnessAvailability,
   HarnessInfo,
+  KeyboardShortcut,
   MessageBlock,
   PromptElement,
   SourceLocation,
@@ -15,7 +16,7 @@ import type {
 import { clampEffort, harnessInfo, modelEfforts } from "@/lib/harness";
 import { buildDomContext, resolveSource } from "@/dom/picker";
 
-export type View = "list" | "chat";
+export type View = "list" | "chat" | "settings";
 export type PickerKind = "harness" | "agent" | "effort";
 
 export interface Cfg {
@@ -66,6 +67,16 @@ export interface PincerStore {
   turnRunning: boolean;
   picker: PickerKind | null;
 
+  // ---- durable overlay settings ----
+  shortcut: KeyboardShortcut;
+  showFloatingButton: boolean;
+  appRoot: string | null;
+  appOrigin: string | null;
+  settingsLoaded: boolean;
+  settingsPending: boolean;
+  settingsError: string | null;
+  recordingShortcut: boolean;
+
   // ---- harness catalog ----
   harnesses: HarnessAvailability[];
   efforts: string[];
@@ -92,9 +103,15 @@ export interface PincerStore {
   setPanelOpen: (open: boolean) => void;
   setView: (view: View) => void;
   openPicker: (kind: PickerKind) => void;
+  openSettings: () => void;
   closePicker: () => void;
   setSelecting: (on: boolean) => void;
   setTurnRunning: (r: boolean) => void;
+  prepareSettings: (appRoot: string | null, appOrigin: string | null, error: string | null) => void;
+  startRecordingShortcut: () => void;
+  cancelRecordingShortcut: () => void;
+  updateShortcut: (shortcut: KeyboardShortcut) => void;
+  updateShowFloatingButton: (show: boolean) => void;
 
   // ---- config ----
   updateCfg: (patch: Partial<Cfg>) => void;
@@ -193,6 +210,15 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
     turnRunning: false,
     picker: null,
 
+    shortcut: DEFAULT_TOGGLE_SHORTCUT,
+    showFloatingButton: true,
+    appRoot: null,
+    appOrigin: null,
+    settingsLoaded: false,
+    settingsPending: false,
+    settingsError: null,
+    recordingShortcut: false,
+
     harnesses: [],
     efforts: DEFAULT_EFFORTS,
     harnessMap: {},
@@ -208,22 +234,101 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 
     send: () => {},
     setSend: (fn) => set({ send: fn }),
-    setConnected: (c) => set({ connected: c }),
+    setConnected: (connected) =>
+      set(
+        connected
+          ? { connected: true }
+          : { connected: false, settingsLoaded: false, settingsPending: false, recordingShortcut: false },
+      ),
 
     setPanelOpen: (open) => {
       if (open === get().panelOpen) return;
       if (open) {
-        set({ panelOpen: true, view: "list" });
+        set({ panelOpen: true, view: "list", recordingShortcut: false });
         get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
       } else {
-        set({ panelOpen: false, selecting: false, picker: null });
+        set({ panelOpen: false, selecting: false, picker: null, recordingShortcut: false });
       }
     },
-    setView: (view) => set({ view }),
+    setView: (view) =>
+      set((state) => ({
+        view,
+        recordingShortcut: view === "settings" ? state.recordingShortcut : false,
+      })),
+    openSettings: () =>
+      set({
+        view: "settings",
+        picker: null,
+        selecting: false,
+        recordingShortcut: false,
+      }),
     openPicker: (kind) => set({ picker: kind }),
     closePicker: () => set({ picker: null }),
     setSelecting: (on) => set({ selecting: on }),
     setTurnRunning: (r) => set({ turnRunning: r }),
+    prepareSettings: (appRoot, appOrigin, error) =>
+      set({
+        appRoot,
+        appOrigin,
+        settingsLoaded: false,
+        settingsPending: false,
+        settingsError: error,
+        recordingShortcut: false,
+      }),
+    startRecordingShortcut: () => {
+      const state = get();
+      if (
+        !state.connected ||
+        !state.settingsLoaded ||
+        state.settingsPending ||
+        !state.appRoot ||
+        !state.appOrigin
+      ) {
+        return;
+      }
+      set({ recordingShortcut: true, settingsError: null });
+    },
+    cancelRecordingShortcut: () => set({ recordingShortcut: false }),
+    updateShortcut: (shortcut) => {
+      const state = get();
+      if (
+        !state.connected ||
+        !state.settingsLoaded ||
+        state.settingsPending ||
+        !state.appRoot ||
+        !state.appOrigin
+      ) {
+        return;
+      }
+      set({ settingsPending: true, settingsError: null, recordingShortcut: false });
+      state.send({
+        v: PROTOCOL_VERSION,
+        type: "update_overlay_settings",
+        appRoot: state.appRoot,
+        appOrigin: state.appOrigin,
+        shortcut,
+      });
+    },
+    updateShowFloatingButton: (showFloatingButton) => {
+      const state = get();
+      if (
+        !state.connected ||
+        !state.settingsLoaded ||
+        state.settingsPending ||
+        !state.appRoot ||
+        !state.appOrigin
+      ) {
+        return;
+      }
+      set({ settingsPending: true, settingsError: null });
+      state.send({
+        v: PROTOCOL_VERSION,
+        type: "update_overlay_settings",
+        appRoot: state.appRoot,
+        appOrigin: state.appOrigin,
+        showFloatingButton,
+      });
+    },
 
     updateCfg: (patch) => {
       const s = get();
@@ -304,6 +409,19 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
           });
           break;
         }
+        case "overlay_settings":
+          if (msg.settings.appOrigin !== s.appOrigin) break;
+          set({
+            appRoot: msg.settings.appRoot,
+            appOrigin: msg.settings.appOrigin,
+            shortcut: msg.settings.shortcut,
+            showFloatingButton: msg.settings.showFloatingButton,
+            settingsLoaded: true,
+            settingsPending: false,
+            settingsError: null,
+            recordingShortcut: false,
+          });
+          break;
         case "conversations":
           set({ conversations: msg.items });
           break;
@@ -315,6 +433,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
             messages: [],
             streamingIndex: null,
             view: "chat",
+            recordingShortcut: false,
           });
           const pending = s.pendingPrompt;
           if (pending) {
@@ -340,6 +459,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
             messages,
             streamingIndex: null,
             view: "chat",
+            recordingShortcut: false,
           });
           break;
         }
@@ -379,12 +499,23 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
           break;
         case "accepted":
         case "discarded":
-          set({ conversationId: null, view: "list" });
+          set({ conversationId: null, view: "list", recordingShortcut: false });
           get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
           break;
-        case "error":
-          sysNote(msg.message);
+        case "error": {
+          const settingsRequestActive =
+            s.settingsPending ||
+            (!s.settingsLoaded && s.connected && s.appRoot !== null && s.appOrigin !== null);
+          if (
+            msg.code === "settings_unavailable" ||
+            (msg.code === "bad_message" && settingsRequestActive)
+          ) {
+            set({ settingsPending: false, settingsError: msg.message, recordingShortcut: false });
+          } else {
+            sysNote(msg.message);
+          }
           break;
+        }
       }
     },
   };

@@ -14,6 +14,8 @@ export interface AgentTask {
   /** All selected elements when multi-selecting; the daemon renders each in the prompt. */
   elements?: PromptElement[];
   projectRoot: string;
+  /** Daemon-selected user storage for this project's Pincer runtime data. */
+  pincerDataDir: string;
   conversationId: string;
   /** Prior CLI session to continue within this conversation (story 20). */
   resumeSessionId: string | null;

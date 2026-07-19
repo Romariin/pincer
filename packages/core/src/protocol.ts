@@ -98,6 +98,68 @@ export interface ConversationConfig {
   effort?: string;
 }
 
+export interface KeyboardShortcut {
+  code: string;
+  alt: boolean;
+  ctrl: boolean;
+  shift: boolean;
+  meta: boolean;
+}
+
+export const DEFAULT_TOGGLE_SHORTCUT: KeyboardShortcut = {
+  code: "KeyP",
+  alt: true,
+  ctrl: false,
+  shift: true,
+  meta: false,
+};
+
+const FORBIDDEN_SHORTCUT_CODES: Record<string, true> = {
+  Escape: true,
+  Unidentified: true,
+  AltLeft: true,
+  AltRight: true,
+  ControlLeft: true,
+  ControlRight: true,
+  ShiftLeft: true,
+  ShiftRight: true,
+  MetaLeft: true,
+  MetaRight: true,
+};
+
+export function isKeyboardShortcut(value: unknown): value is KeyboardShortcut {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("code" in value) ||
+    typeof value.code !== "string" ||
+    !/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.code) ||
+    Object.hasOwn(FORBIDDEN_SHORTCUT_CODES, value.code)
+  ) {
+    return false;
+  }
+  if (
+    !("alt" in value) ||
+    typeof value.alt !== "boolean" ||
+    !("ctrl" in value) ||
+    typeof value.ctrl !== "boolean" ||
+    !("shift" in value) ||
+    typeof value.shift !== "boolean" ||
+    !("meta" in value) ||
+    typeof value.meta !== "boolean"
+  ) {
+    return false;
+  }
+  return value.alt || value.ctrl || value.meta;
+}
+
+export interface OverlaySettings {
+  appRoot: string;
+  appOrigin: string;
+  shortcut: KeyboardShortcut;
+  showFloatingButton: boolean;
+}
+
 /** Client -> Daemon messages. */
 export type ClientMessage =
   | { v: number; type: "list_conversations" }
@@ -116,6 +178,16 @@ export type ClientMessage =
       /** All selected elements when multi-selecting; omitted/empty falls back to the primary. */
       elements?: PromptElement[];
     }
+  | { v: number; type: "get_overlay_settings"; appRoot: string; appOrigin: string }
+  | {
+      v: number;
+      type: "update_overlay_settings";
+      appRoot: string;
+      appOrigin: string;
+      shortcut?: KeyboardShortcut;
+      showFloatingButton?: boolean;
+    }
+
   | { v: number; type: "cancel"; conversationId: string }
   | { v: number; type: "revert"; conversationId: string }
   | { v: number; type: "accept"; conversationId: string }
@@ -154,6 +226,8 @@ export type ServerMessage =
       files?: string[];
       message: string;
     }
+  | { v: number; type: "overlay_settings"; settings: OverlaySettings }
+
   | { v: number; type: "turn_started"; conversationId: string; turnId: number; seq: number }
   | { v: number; type: "agent_output"; conversationId: string; turnId: number; event: AgentEvent }
   | {
@@ -172,7 +246,7 @@ export type ServerMessage =
   | {
       v: number;
       type: "error";
-      code?: "merge_conflict" | "unknown_conversation" | "bad_message";
+      code?: "merge_conflict" | "unknown_conversation" | "bad_message" | "settings_unavailable";
       message: string;
     };
 

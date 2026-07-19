@@ -1,10 +1,14 @@
 import type { Server, ServerWebSocket } from "bun";
+import { realpathSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   PROTOCOL_VERSION,
   EFFORTS,
-  type ClientMessage,
+  isKeyboardShortcut,
   type ConversationConfig,
   type DomContext,
+  type KeyboardShortcut,
+  type OverlaySettings,
   type PromptElement,
   type ServerMessage,
   type SourceLocation,
@@ -13,8 +17,25 @@ import { Git } from "./git";
 import { Store } from "./store";
 import { resolveHarnesses } from "./agents/registry";
 import { Orchestrator, type Emit } from "./orchestrator";
+import {
+  defaultDataRoot,
+  migrateLegacyProjectData,
+  projectDataDir,
+  projectStorageKey,
+  settingsDbPath,
+} from "./paths";
+import { SettingsStore } from "./settingsStore";
 
 const DAEMON_VERSION = "0.1.0";
+
+// Browser WebSocket upgrades do not enforce CORS. Restrict browser callers to
+// loopback origins; local non-browser clients omit Origin and remain supported.
+const LOCAL_ORIGIN_RE =
+  /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]+\.localhost)(:\d+)?$/i;
+
+export function isLocalOrigin(origin: string | null): boolean {
+  return origin === null || LOCAL_ORIGIN_RE.test(origin);
+}
 
 export interface DaemonOptions {
   projectRoot: string;
@@ -22,6 +43,7 @@ export interface DaemonOptions {
   agentId?: string;
   agentCommand?: string[];
   log?: (msg: string) => void;
+  dataRoot?: string;
 }
 
 export interface RunningDaemon {
@@ -38,9 +60,21 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     throw new Error(`Not a git repository: ${opts.projectRoot}. Pincer requires a git repo.`);
   }
 
+  const dataRoot = opts.dataRoot ?? defaultDataRoot();
+  migrateLegacyProjectData(opts.projectRoot, dataRoot, log);
+  const pincerDataDir = projectDataDir(opts.projectRoot, dataRoot);
+
   const harnesses = await resolveHarnesses({ agentId: opts.agentId, command: opts.agentCommand });
-  const store = new Store(opts.projectRoot);
-  const orchestrator = new Orchestrator({ git, store, projectRoot: opts.projectRoot, harnesses, log });
+  const store = new Store(join(pincerDataDir, "history.db"));
+  const settingsStore = new SettingsStore(settingsDbPath(dataRoot));
+  const orchestrator = new Orchestrator({
+    git,
+    store,
+    projectRoot: opts.projectRoot,
+    pincerDataDir,
+    harnesses,
+    log,
+  });
 
   const welcome: ServerMessage = {
     v: PROTOCOL_VERSION,
@@ -54,9 +88,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
   };
 
   const server = Bun.serve({
+    hostname: "127.0.0.1",
     port: opts.port,
     fetch(req, srv) {
-      if (srv.upgrade(req)) return undefined;
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const origin = req.headers.get("origin");
+        if (!isLocalOrigin(origin)) {
+          log(`rejected WebSocket upgrade from origin ${origin}`);
+          return new Response("forbidden origin", { status: 403 });
+        }
+        if (srv.upgrade(req)) return undefined;
+      }
       return new Response("pincer daemon");
     },
     websocket: {
@@ -74,7 +116,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
           emit({ v: PROTOCOL_VERSION, type: "error", code: "bad_message", message: "Invalid JSON." });
           return;
         }
-        await dispatch(orchestrator, parsed, emit);
+        await dispatch(orchestrator, parsed, opts.projectRoot, settingsStore, emit);
       },
       close() {},
     },
@@ -87,6 +129,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
     stop() {
       server.stop(true);
       store.close();
+      settingsStore.close();
     },
   };
 }
@@ -99,13 +142,124 @@ function readConfig(msg: Record<string, unknown>): ConversationConfig {
   return c;
 }
 
-async function dispatch(orch: Orchestrator, raw: unknown, emit: Emit): Promise<void> {
-  if (raw === null || typeof raw !== "object") {
+export interface SettingsRepository {
+  getSettings(appKey: string, appRoot: string, appOrigin: string): OverlaySettings;
+  updateSettings(
+    appKey: string,
+    appRoot: string,
+    appOrigin: string,
+    patch: { shortcut?: KeyboardShortcut; showFloatingButton?: boolean },
+  ): OverlaySettings;
+}
+
+function canonicalAppRoot(raw: unknown, daemonProjectRoot: string): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const projectRoot = realpathSync(daemonProjectRoot);
+    const appRoot = realpathSync(raw);
+    const relation = relative(projectRoot, appRoot);
+    if (relation === ".." || relation.startsWith(`..${sep}`) || isAbsolute(relation)) return null;
+    return appRoot;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalAppOrigin(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function handleSettingsMessage(
+  raw: Record<string, unknown>,
+  daemonProjectRoot: string,
+  settings: SettingsRepository,
+  emit: Emit,
+): boolean {
+  if (raw.type !== "get_overlay_settings" && raw.type !== "update_overlay_settings") return false;
+
+  const appRoot = canonicalAppRoot(raw.appRoot, daemonProjectRoot);
+  if (!appRoot) {
+    emit({ v: PROTOCOL_VERSION, type: "error", code: "bad_message", message: "Invalid app root." });
+    return true;
+  }
+  const appOrigin = canonicalAppOrigin(raw.appOrigin);
+  if (!appOrigin) {
+    emit({ v: PROTOCOL_VERSION, type: "error", code: "bad_message", message: "Invalid app origin." });
+    return true;
+  }
+
+  const appKey = projectStorageKey(appRoot);
+  try {
+    if (raw.type === "get_overlay_settings") {
+      emit({
+        v: PROTOCOL_VERSION,
+        type: "overlay_settings",
+        settings: settings.getSettings(appKey, appRoot, appOrigin),
+      });
+      return true;
+    }
+
+    const hasShortcut = Object.hasOwn(raw, "shortcut");
+    const hasFloatingButton = Object.hasOwn(raw, "showFloatingButton");
+    if (
+      (!hasShortcut && !hasFloatingButton) ||
+      (hasShortcut && !isKeyboardShortcut(raw.shortcut)) ||
+      (hasFloatingButton && typeof raw.showFloatingButton !== "boolean")
+    ) {
+      emit({
+        v: PROTOCOL_VERSION,
+        type: "error",
+        code: "bad_message",
+        message: "Invalid overlay settings update.",
+      });
+      return true;
+    }
+
+    const patch: { shortcut?: KeyboardShortcut; showFloatingButton?: boolean } = {};
+    if (isKeyboardShortcut(raw.shortcut)) patch.shortcut = raw.shortcut;
+    if (typeof raw.showFloatingButton === "boolean") {
+      patch.showFloatingButton = raw.showFloatingButton;
+    }
+    emit({
+      v: PROTOCOL_VERSION,
+      type: "overlay_settings",
+      settings: settings.updateSettings(appKey, appRoot, appOrigin, patch),
+    });
+  } catch {
+    emit({
+      v: PROTOCOL_VERSION,
+      type: "error",
+      code: "settings_unavailable",
+      message: "Pincer settings are unavailable.",
+    });
+  }
+  return true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+async function dispatch(
+  orch: Orchestrator,
+  raw: unknown,
+  daemonProjectRoot: string,
+  settings: SettingsRepository,
+  emit: Emit,
+): Promise<void> {
+  if (!isRecord(raw)) {
     emit({ v: PROTOCOL_VERSION, type: "error", code: "bad_message", message: "Expected an object." });
     return;
   }
-  const msg = raw as Partial<ClientMessage> & Record<string, unknown>;
-
+  const msg = raw;
+  if (handleSettingsMessage(msg, daemonProjectRoot, settings, emit)) return;
   switch (msg.type) {
     case "list_conversations":
       emit(orch.listConversations());

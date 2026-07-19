@@ -27,24 +27,29 @@ so any change is revertable, acceptable (merge to base), or discardable.
 ## Quick start
 
 ```sh
+# From any Git-backed app, run its existing dev command through Pincer:
+pincer -- bun run dev
+
+# Or use this repository's compiled binary against the demo:
 bun install
-bun run build:overlay      # build the overlay bundle (needed before dev/E2E)
-bun run build:daemon       # produce ./dist/pincer
-
-# terminal 1 — run the daemon against your project
-./dist/pincer --project examples/demo
-
-# terminal 2 — run the app's dev server
-cd examples/demo && bun run dev
+bun run build:overlay
+bun run build:daemon
+./dist/pincer --project examples/demo -- bun run dev
 ```
 
-Open the Vite URL, press `Alt+Shift+P` (`Option+Shift+P` on macOS), hover to
-highlight, click an element, type a change, and Submit. The shortcut matches the
-physical key, so it is layout- and OS-independent (plain `Alt+P` is avoided
-because Windows browsers reserve `Alt`/`Alt+<letter>` for the menu bar); override
-it with `pincer({ toggleKey: "…" })`.
+Pincer starts the daemon and child dev server, detects the child's local URL,
+then prints a proxy URL to open. The proxy injects the overlay and forwards HTTP
+and HMR WebSocket traffic, so per-app Pincer setup is not required. Adding
+`@pincer/vite-react` remains an optional precision upgrade for exact JSX source
+locations; without it, Pincer uses DOM context and agent search.
 
-## Bun runtime note for `@pincer/vite-react`
+Open the printed Pincer proxy URL and use the floating crab launcher or press `Alt+Shift+P`
+(`Option+Shift+P` on macOS). Open the Settings gear to choose one shortcut for
+every Pincer app or hide the launcher for the current app and site. Pincer keeps
+history, CLI sessions, and settings under `~/.pincer`, automatically migrates
+legacy project-local data, and requires no project `.gitignore` entry.
+
+## Bun runtime note for the optional `@pincer/vite-react` plugin
 
 The packages are published as raw TypeScript source (`exports` → `./src`), which
 Bun resolves directly with no build step. **Vite must therefore run under the

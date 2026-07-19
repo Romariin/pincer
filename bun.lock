@@ -39,6 +39,7 @@
       },
       "dependencies": {
         "@pincer/core": "workspace:*",
+        "@pincer/overlay": "workspace:*",
       },
     },
     "packages/overlay": {

@@ -1,7 +1,9 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PROTOCOL_VERSION } from "@pincer/core";
+import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
 import { createHarness, FAKE_CLAUDE_SLOW, type Harness } from "./harness";
 
 const V = PROTOCOL_VERSION;
@@ -34,7 +36,7 @@ async function runTurn(harness: Harness, convId: string, prompt: string): Promis
 }
 
 function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> {
-  const db = new Database(join(harness.dir, ".pincer/history.db"));
+  const db = new Database(harness.historyDbPath);
   try {
     const row = db
       .query("SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1")
@@ -45,6 +47,11 @@ function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> 
     db.close();
   }
 }
+async function getOverlaySettings(harness: Harness, appRoot: string, appOrigin: string) {
+  harness.send({ v: V, type: "get_overlay_settings", appRoot, appOrigin });
+  return harness.next("overlay_settings");
+}
+
 
 test("happy turn edits the file in place and records the turn", async () => {
   h = await createHarness();
@@ -182,4 +189,122 @@ test("history survives a daemon restart", async () => {
   const found = list.items.find((c) => c.id === convId);
   expect(found).toBeDefined();
   expect(found?.turnCount).toBe(1);
+});
+
+test("global shortcuts and app-origin launcher settings persist at their intended scopes", async () => {
+  const sharedDataRoot = mkdtempSync(join(tmpdir(), "pincer-shared-settings-"));
+  let a: Harness | undefined;
+  let b: Harness | undefined;
+  const origin = "http://localhost:5173";
+  const shortcut = { code: "KeyK", alt: false, ctrl: true, shift: true, meta: false };
+  try {
+    a = await createHarness({ dataRoot: sharedDataRoot });
+    b = await createHarness({ dataRoot: sharedDataRoot });
+
+    a.send({
+      v: V,
+      type: "update_overlay_settings",
+      appRoot: a.dir,
+      appOrigin: origin,
+      shortcut,
+      showFloatingButton: false,
+    });
+    const aUpdated = await a.next("overlay_settings");
+    expect(aUpdated.settings.shortcut).toEqual(shortcut);
+    expect(aUpdated.settings.showFloatingButton).toBe(false);
+    await expect(b.next("overlay_settings", 250)).rejects.toThrow("timed out");
+
+    await b.restart();
+    const bSettings = await getOverlaySettings(b, b.dir, origin);
+    expect(bSettings.settings.shortcut).toEqual(shortcut);
+    expect(bSettings.settings.showFloatingButton).toBe(true);
+
+    const appOne = join(a.dir, "apps", "one");
+    const appTwo = join(a.dir, "apps", "two");
+    mkdirSync(appOne, { recursive: true });
+    mkdirSync(appTwo, { recursive: true });
+    a.send({
+      v: V,
+      type: "update_overlay_settings",
+      appRoot: appOne,
+      appOrigin: origin,
+      showFloatingButton: false,
+    });
+    const appOneUpdated = await a.next("overlay_settings");
+    expect(appOneUpdated.settings.showFloatingButton).toBe(false);
+    const appTwoSettings = await getOverlaySettings(a, appTwo, origin);
+    expect(appTwoSettings.settings.showFloatingButton).toBe(true);
+
+    await a.restart();
+    const persisted = await getOverlaySettings(a, appOne, origin);
+    expect(persisted.settings.shortcut).toEqual(shortcut);
+    expect(persisted.settings.showFloatingButton).toBe(false);
+    const otherPort = await getOverlaySettings(a, appOne, "http://localhost:5174/path?x=1#hash");
+    expect(otherPort.settings.shortcut).toEqual(shortcut);
+    expect(otherPort.settings.showFloatingButton).toBe(true);
+    expect(otherPort.settings.appOrigin).toBe("http://localhost:5174");
+  } finally {
+    await a?.close();
+    await b?.close();
+    rmSync(sharedDataRoot, { recursive: true, force: true });
+  }
+});
+
+test("settings protocol rejects invalid scope and patches without changing stored values", async () => {
+  h = await createHarness();
+  const origin = "http://localhost:5173";
+
+  h.send({
+    v: V,
+    type: "get_overlay_settings",
+    appRoot: h.dataRoot,
+    appOrigin: origin,
+  });
+  expect(await h.next("error")).toMatchObject({
+    code: "bad_message",
+    message: "Invalid app root.",
+  });
+
+  h.send({
+    v: V,
+    type: "update_overlay_settings",
+    appRoot: h.dir,
+    appOrigin: origin,
+  });
+  expect(await h.next("error")).toMatchObject({
+    code: "bad_message",
+    message: "Invalid overlay settings update.",
+  });
+
+  for (const shortcut of [
+    { code: "KeyK", alt: false, ctrl: false, shift: true, meta: false },
+    { code: "AltLeft", alt: true, ctrl: false, shift: false, meta: false },
+  ]) {
+    h.send({
+      v: V,
+      type: "update_overlay_settings",
+      appRoot: h.dir,
+      appOrigin: origin,
+      shortcut,
+    });
+    expect(await h.next("error")).toMatchObject({
+      code: "bad_message",
+      message: "Invalid overlay settings update.",
+    });
+  }
+
+  h.send({
+    v: V,
+    type: "get_overlay_settings",
+    appRoot: h.dir,
+    appOrigin: "file:///tmp/index.html",
+  });
+  expect(await h.next("error")).toMatchObject({
+    code: "bad_message",
+    message: "Invalid app origin.",
+  });
+
+  const settings = await getOverlaySettings(h, h.dir, origin);
+  expect(settings.settings.shortcut).toEqual(DEFAULT_TOGGLE_SHORTCUT);
+  expect(settings.settings.showFloatingButton).toBe(true);
 });
