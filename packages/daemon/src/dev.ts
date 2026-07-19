@@ -49,7 +49,6 @@ export function injectHtml(html: string, config: Record<string, unknown>): strin
     : output + loader;
   return output;
 }
-
 function forwardableCloseCode(code: number): number {
   return code >= 1000 && code <= 4999 && code !== 1005 && code !== 1006 && code !== 1015
     ? code
@@ -63,6 +62,7 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
     wsUrl: opts.wsUrl,
     contractAVersion: CONTRACT_A_VERSION,
     projectRoot: opts.projectRoot,
+
   };
 
   const server = Bun.serve<ProxyWsData>({
@@ -91,6 +91,7 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
 
       const headers = new Headers(req.headers);
       headers.delete("host");
+
       headers.delete("accept-encoding");
 
       let upstream: Response;
@@ -180,6 +181,7 @@ export function findLocalUrl(text: string): string | null {
 
 interface SpawnedDev {
   child: Subprocess<"inherit", "pipe", "pipe">;
+
   detectedTarget: Promise<string>;
 }
 
@@ -211,6 +213,7 @@ function spawnDevServer(command: string[], cwd: string): SpawnedDev {
       resolveTarget(url);
     }
   };
+
   const tee = async (
     stream: ReadableStream<Uint8Array>,
     write: (chunk: Uint8Array) => void,
@@ -234,6 +237,7 @@ function spawnDevServer(command: string[], cwd: string): SpawnedDev {
 
   return { child, detectedTarget };
 }
+
 
 export interface DevOptions {
   projectRoot: string;

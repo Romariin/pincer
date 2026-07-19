@@ -26,22 +26,44 @@ so any change is revertable, acceptable (merge to base), or discardable.
 
 ## Quick start
 
+Two ways to get the overlay into your app:
+
+- **`pincer dev` (zero install)** — wraps your dev server behind an injection
+  proxy; nothing to add to the app. Source resolution falls back to DOM context
+  + agent search.
+- **Framework plugin** (`@pincer/vite-react`, react-grab style) — installed in
+  the app; tags every element with its exact `file:line:col` (Contract A) for
+  maximum precision.
+
 ```sh
 # From any Git-backed app, run its existing dev command through Pincer:
 pincer -- bun run dev
 
 # Or use this repository's compiled binary against the demo:
 bun install
-bun run build:overlay
-bun run build:daemon
+bun run build:overlay      # build the overlay bundle (needed before dev/E2E)
+bun run build:daemon       # produce ./dist/pincer
+
+# zero-install: one terminal, daemon + your dev server + injection proxy
 ./dist/pincer --project examples/demo -- bun run dev
+# `./dist/pincer dev --project examples/demo -- bun run dev` is also supported
+# → open the printed proxy URL (default http://localhost:7392)
+
+# plugin route: terminal 1 — run the daemon against your project
+./dist/pincer --project examples/demo
+# terminal 2 — run the app's dev server (with @pincer/vite-react configured)
+cd examples/demo && bun run dev
 ```
 
 Pincer starts the daemon and child dev server, detects the child's local URL,
 then prints a proxy URL to open. The proxy injects the overlay and forwards HTTP
-and HMR WebSocket traffic, so per-app Pincer setup is not required. Adding
-`@pincer/vite-react` remains an optional precision upgrade for exact JSX source
-locations; without it, Pincer uses DOM context and agent search.
+and HMR WebSocket traffic, so per-app Pincer setup is not required. Pass
+`--target http://localhost:<port>` to skip detection and optionally front an
+already-running server without a child command. The daemon only binds
+`127.0.0.1` and rejects WebSocket connections from non-localhost browser
+origins. Adding `@pincer/vite-react` remains an optional precision upgrade for
+exact JSX source locations; without it, Pincer uses DOM context and agent
+search.
 
 Open the printed Pincer proxy URL and use the floating crab launcher or press `Alt+Shift+P`
 (`Option+Shift+P` on macOS). Open the Settings gear to choose one shortcut for

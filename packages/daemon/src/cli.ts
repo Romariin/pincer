@@ -21,6 +21,11 @@ Options:
   --agent-command "<cmd>"   Override the agent CLI command, shell-split (e.g. "bunx claude").
   -h, --help                Show this help.
 
+Options (pincer dev only):
+  --proxy-port <n>          Injection proxy port. Default: ${DEFAULT_PROXY_PORT}.
+  --target <url>            Upstream dev server URL. Default: auto-detected from the command's output.
+  --toggle-key "<combo>"    Overlay toggle shortcut. Default: Alt+Shift+P.
+
 Config file (optional): pincer.config.json in the project root:
   { "port": 7391, "proxyPort": 7392, "agent": { "id": "claude-code", "command": ["claude"] } }
 Precedence: CLI flags > config file > defaults.
@@ -41,6 +46,7 @@ interface CliArgs {
 interface FileConfig {
   port?: number;
   proxyPort?: number;
+
   agent?: { id?: string; command?: string[] };
 }
 
@@ -79,6 +85,7 @@ function parseArgs(argv: string[]): CliArgs {
       case "--target":
         args.target = argv[++i];
         break;
+
       case "--agent":
         args.agentId = argv[++i];
         break;
@@ -140,6 +147,7 @@ if (proxyMode) {
     proxyPort: args.proxyPort ?? fileConfig.proxyPort ?? DEFAULT_PROXY_PORT,
     command: args.command,
     target: args.target,
+
     agentId,
     agentCommand,
     log,

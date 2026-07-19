@@ -105,6 +105,7 @@ test("returns 502 when the upstream is unavailable", async () => {
   const deadPort = upstream.port;
   upstream.stop(true);
   upstream = undefined;
+
   proxy = startDevProxy({
     target: `http://127.0.0.1:${deadPort}`,
     port: 0,
@@ -127,6 +128,7 @@ test("detects plain, colored, and wildcard local URLs", () => {
   expect(findLocalUrl("ready on \u001b[36mhttp://127.0.0.1:3000\u001b[0m")).toBe(
     "http://127.0.0.1:3000",
   );
+
   expect(findLocalUrl("Local: http://localhost:\u001b[1m5173\u001b[22m/")).toBe(
     "http://localhost:5173",
   );

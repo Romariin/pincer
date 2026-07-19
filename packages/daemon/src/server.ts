@@ -28,8 +28,10 @@ import { SettingsStore } from "./settingsStore";
 
 const DAEMON_VERSION = "0.1.0";
 
-// Browser WebSocket upgrades do not enforce CORS. Restrict browser callers to
-// loopback origins; local non-browser clients omit Origin and remain supported.
+// Browsers do not apply CORS to WebSocket upgrades, so without this check any
+// web page or DNS-rebound origin could connect and drive an agent that edits
+// local files. Restrict browser callers to loopback origins; local non-browser
+// clients omit Origin and remain supported.
 const LOCAL_ORIGIN_RE =
   /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]+\.localhost)(:\d+)?$/i;
 
