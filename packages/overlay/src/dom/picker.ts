@@ -1,11 +1,11 @@
-import { SOURCE_ATTR, parseSourceAttr } from "@pincer/core";
+import { SOURCE_ATTR, formatSourceAttr, parseSourceAttr } from "@pincer/core";
 import type { DomContext, SourceLocation } from "@pincer/core";
+const TSD_SOURCE_ATTR = "data-tsd-source";
 
-/** Walk ancestors for the nearest `data-pincer-source` attribute (Contract A). */
-export function resolveSource(node: HTMLElement): SourceLocation | null {
+function resolveAttributeSource(node: HTMLElement, attribute: string): SourceLocation | null {
   let cur: HTMLElement | null = node;
   while (cur) {
-    const attr = cur.getAttribute(SOURCE_ATTR);
+    const attr = cur.getAttribute(attribute);
     if (attr) {
       const parsed = parseSourceAttr(attr);
       if (parsed) return parsed;
@@ -13,6 +13,43 @@ export function resolveSource(node: HTMLElement): SourceLocation | null {
     cur = cur.parentElement;
   }
   return null;
+}
+
+/** Walk ancestors for the nearest `data-pincer-source` attribute (Contract A). */
+export function resolveSource(node: HTMLElement): SourceLocation | null {
+  return resolveAttributeSource(node, SOURCE_ATTR);
+}
+export function elementReference(node: HTMLElement): string {
+  const source = resolveSource(node) ?? resolveAttributeSource(node, TSD_SOURCE_ATTR);
+  if (source) return formatSourceAttr({ ...source, path: source.path.replace(/^\/+/, "") });
+
+  const context = buildDomContext(node);
+  const element = context.ancestry[0] ?? `<${context.tag}>`;
+  const text = context.text ? ` ${JSON.stringify(context.text)}` : "";
+  const parents = context.ancestry.slice(1).join(" > ");
+  return `[${element}${text}${parents ? ` in ${parents}` : ""}]`;
+}
+
+export async function copyElementReference(node: HTMLElement): Promise<void> {
+  const reference = elementReference(node);
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(reference);
+      return;
+    } catch {
+      // Clipboard permissions can reject even after a user gesture; use the legacy fallback below.
+    }
+  }
+
+  const field = document.createElement("textarea");
+  field.value = reference;
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  field.select();
+  const copied = document.execCommand("copy");
+  field.remove();
+  if (!copied) throw new Error("Clipboard write failed");
 }
 
 /** `tag#id.class` breadcrumb for a single element. */

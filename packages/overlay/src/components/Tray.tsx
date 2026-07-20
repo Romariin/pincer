@@ -3,13 +3,15 @@ import { usePincerStore } from "@/state/store";
 import { breadcrumb } from "@/dom/picker";
 import { MONO } from "@/lib/constants";
 import { Button } from "./ui/button";
-import { PlusIcon, XIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, PlusIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 
 export function Tray(): ReactNode {
   const selections = usePincerStore((s) => s.selections);
   const selecting = usePincerStore((s) => s.selecting);
   const setSelecting = usePincerStore((s) => s.setSelecting);
   const removeSelection = usePincerStore((s) => s.removeSelection);
+  const referenceCopyStatus = usePincerStore((s) => s.referenceCopyStatus);
+  const startCopyingReference = usePincerStore((s) => s.startCopyingReference);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [fades, setFades] = useState({ left: false, right: false });
@@ -26,6 +28,16 @@ export function Tray(): ReactNode {
   }, [selections, updateFades]);
 
   const has = selections.length > 0;
+  const copying = referenceCopyStatus === "selecting";
+  const attaching = selecting && !copying;
+  const copyLabel =
+    referenceCopyStatus === "copied"
+      ? "Copied"
+      : referenceCopyStatus === "error"
+        ? "Try again"
+        : copying
+          ? "Select element"
+          : "Copy reference";
 
   return (
     <div className="flex min-h-[40px] shrink-0 items-center gap-2 px-3 pb-0.5 pt-1.5">
@@ -65,10 +77,27 @@ export function Tray(): ReactNode {
         <span className="flex-1 text-[13px] text-muted-foreground">No elements selected</span>
       )}
       <Button
-        variant={selecting ? "default" : "secondary"}
+        variant={copying ? "default" : "ghost"}
         size="sm"
         className="shrink-0 gap-1.5 text-[13px]"
-        onClick={() => setSelecting(!selecting)}
+        aria-label={copying ? "Cancel copying element reference" : "Copy element reference"}
+        title={copying ? "Cancel" : "Pick an element and copy its source reference"}
+        onClick={() => (copying ? setSelecting(false) : startCopyingReference())}
+      >
+        {referenceCopyStatus === "copied" ? (
+          <CheckIcon />
+        ) : referenceCopyStatus === "error" ? (
+          <TriangleAlertIcon />
+        ) : (
+          <CopyIcon />
+        )}
+        <span aria-live="polite">{copyLabel}</span>
+      </Button>
+      <Button
+        variant={attaching ? "default" : "secondary"}
+        size="sm"
+        className="shrink-0 gap-1.5 text-[13px]"
+        onClick={() => setSelecting(!attaching)}
       >
         <PlusIcon />
         Add element
