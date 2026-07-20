@@ -48,7 +48,7 @@ test("welcome exposes protocol-v4 catalog-only Harness descriptors and only CLI-
 	).toEqual([]);
 });
 
-test("welcome exposes Claude's dynamically discovered models and efforts", async () => {
+test("welcome exposes Claude's control-initialized picker models and efforts", async () => {
 	harness = await createHarness({
 		enableFakeClaude: true,
 		selectedHarnessId: "claude-code",
@@ -70,19 +70,24 @@ test("welcome exposes Claude's dynamically discovered models and efforts", async
 	]);
 	expect(claude?.models).toEqual([
 		{
-			id: "sonnet",
-			label: "Sonnet",
-			efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+			id: "opus[1m]",
+			label: "Opus",
+			efforts: ["low", "medium", "high", "xhigh", "max"],
 		},
 		{
-			id: "opus",
-			label: "Opus",
-			efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+			id: "claude-fable-5[1m]",
+			label: "Fable",
+			efforts: ["low", "medium", "high", "xhigh", "max"],
+		},
+		{
+			id: "sonnet",
+			label: "Sonnet",
+			efforts: ["low", "medium", "high", "xhigh", "max"],
 		},
 		{
 			id: "haiku",
 			label: "Haiku",
-			efforts: ["low", "medium", "high"],
+			efforts: [],
 		},
 	]);
 	expect(harness.invocations()).toEqual([]);

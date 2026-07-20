@@ -15,69 +15,81 @@ function events(events: HarnessEvent[]): HarnessDecodeResult {
 	return { kind: "events", events };
 }
 
-function printResult(stdout: string): string {
-	const message = record(JSON.parse(stdout));
-	return message && typeof message.result === "string" ? message.result : "";
-}
+const CATALOG_REQUEST_ID = "pincer-catalog";
 
-function modelLabel(id: string): string {
-	const match = /^(.+?)(?:\[([^\]]+)\])?$/.exec(id);
-	const name = (match?.[1] ?? id)
-		.replace(/[-_]+/g, " ")
-		.replace(/\b\w/g, (character) => character.toUpperCase());
-	return match?.[2] ? `${name} (${match[2].toUpperCase()})` : name;
+function decodeModel(value: unknown): HarnessModel | null {
+	const model = record(value);
+	if (!model) return null;
+
+	const id = typeof model.value === "string" ? model.value.trim() : "";
+	const label =
+		typeof model.displayName === "string" ? model.displayName.trim() : "";
+	if (!id || id === "default" || !label) return null;
+
+	const efforts =
+		model.supportsEffort === true && Array.isArray(model.supportedEffortLevels)
+			? [
+					...new Set(
+						model.supportedEffortLevels
+							.filter((effort): effort is string => typeof effort === "string")
+							.map((effort) => effort.trim())
+							.filter(Boolean),
+					),
+				]
+			: [];
+	return { id, label, efforts };
 }
 
 function decodeModels(stdout: string): HarnessModel[] {
-	const available =
-		/Available:\s*([\s\S]*?)(?:,?\s+or\s+a full model ID\.?|$)/i.exec(
-			printResult(stdout),
-		)?.[1];
-	if (!available) return [];
-	const models = new Map<string, HarnessModel>();
-	for (const alias of available.split(",").map((value) => value.trim())) {
-		if (!alias || alias === "default") continue;
-		if (!models.has(alias)) {
-			models.set(alias, {
-				id: alias,
-				label: modelLabel(alias),
-				efforts: [],
-			});
+	for (const line of stdout.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+
+		let message: Record<string, unknown> | null;
+		try {
+			message = record(JSON.parse(line));
+		} catch {
+			continue;
 		}
+		if (message?.type !== "control_response") continue;
+
+		const response = record(message.response);
+		if (response?.request_id !== CATALOG_REQUEST_ID) continue;
+		if (response.subtype !== "success") return [];
+
+		const payload = record(response.response);
+		if (!Array.isArray(payload?.models)) return [];
+
+		const models = new Map<string, HarnessModel>();
+		for (const value of payload.models) {
+			const model = decodeModel(value);
+			if (model && !models.has(model.id)) models.set(model.id, model);
+		}
+		return [...models.values()];
 	}
-	return [...models.values()];
+	return [];
 }
 
-function decodeEfforts(stdout: string): string[] {
-	const choices = /\/effort\s+<([^>]+)>/i.exec(printResult(stdout))?.[1];
-	if (!choices) return [];
-	return [
-		...new Set(
-			choices
-				.split("|")
-				.map((value) => value.trim())
-				.filter(Boolean),
-		),
-	];
-}
-
-function catalogInvocation(
-	command: string[],
-	slashCommand: "/model" | "/effort",
-	model?: string,
-) {
+function catalogInvocation(command: string[]) {
 	return {
 		argv: [
 			...command,
-			...(model ? ["--model", model] : []),
-			"-p",
-			slashCommand,
 			"--output-format",
-			"json",
-			"--no-session-persistence",
-			"--max-budget-usd",
-			"0.000001",
+			"stream-json",
+			"--verbose",
+			"--input-format",
+			"stream-json",
+			"--setting-sources=user,project,local",
+			"--permission-mode",
+			"default",
 		],
+		stdin: `${JSON.stringify({
+			type: "control_request",
+			request_id: CATALOG_REQUEST_ID,
+			request: {
+				subtype: "initialize",
+				systemPrompt: [""],
+			},
+		})}\n`,
 	};
 }
 
@@ -94,16 +106,8 @@ export const claudeHarness: HarnessDefinition = {
 	probeArgs: ["--version"],
 	catalog: {
 		models: {
-			build(command) {
-				return catalogInvocation(command, "/model");
-			},
+			build: catalogInvocation,
 			decode: decodeModels,
-		},
-		efforts: {
-			build(command, model) {
-				return catalogInvocation(command, "/effort", model.id);
-			},
-			decode: decodeEfforts,
 		},
 	},
 	buildTurn(request, command) {

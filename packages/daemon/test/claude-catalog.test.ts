@@ -8,81 +8,133 @@ function catalog() {
 	return source;
 }
 
-function expectEffortQuery(
-	argv: string[],
-	command: string[],
-	model: string,
-): void {
-	const modelFlag = argv.indexOf("--model");
-	expect(argv.slice(modelFlag, modelFlag + 2)).toEqual(["--model", model]);
-	expect([...argv.slice(0, modelFlag), ...argv.slice(modelFlag + 2)]).toEqual([
-		...command,
-		"-p",
-		"/effort",
-		"--output-format",
-		"json",
-		"--no-session-persistence",
-		"--max-budget-usd",
-		"0.000001",
-	]);
+const ALL_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+function controlResponse(models: unknown): string {
+	return `${JSON.stringify({
+		type: "control_response",
+		response: {
+			subtype: "success",
+			request_id: "pincer-catalog",
+			response: { models },
+		},
+	})}\n`;
 }
 
-test("Claude catalog builds staged model and model-qualified effort queries", () => {
+test("Claude catalog initializes the control protocol instead of querying slash commands", () => {
 	const source = catalog();
 	const command = ["bun", "/tmp/fake claude.ts", "--wrapper-option"];
 
 	expect(source.models.build(command)).toEqual({
 		argv: [
 			...command,
-			"-p",
-			"/model",
 			"--output-format",
-			"json",
-			"--no-session-persistence",
-			"--max-budget-usd",
-			"0.000001",
+			"stream-json",
+			"--verbose",
+			"--input-format",
+			"stream-json",
+			"--setting-sources=user,project,local",
+			"--permission-mode",
+			"default",
 		],
+		stdin: `${JSON.stringify({
+			type: "control_request",
+			request_id: "pincer-catalog",
+			request: {
+				subtype: "initialize",
+				systemPrompt: [""],
+			},
+		})}\n`,
 	});
-
-	const efforts = source.efforts;
-	if (!efforts) throw new Error("Claude effort discovery is not configured");
-	expectEffortQuery(
-		efforts.build(command, {
-			id: "haiku",
-			label: "Haiku",
-			efforts: [],
-		}).argv,
-		command,
-		"haiku",
-	);
+	expect(source.efforts).toBeUndefined();
 });
 
-test("Claude catalog filters the default alias and decodes each model's advertised efforts", () => {
+test("Claude catalog exposes only non-default picker rows and their advertised efforts", () => {
 	const source = catalog();
 	const models = source.models.decode(
-		JSON.stringify({
-			type: "result",
-			result:
-				"Current model: sonnet\nUsage: /model <name>. Available: sonnet, opus, sonnet[1m], default, or a full model ID.",
-		}),
+		controlResponse([
+			{
+				value: "default",
+				displayName: "Default",
+				supportsEffort: true,
+				supportedEffortLevels: ALL_EFFORTS,
+			},
+			{
+				value: "opus[1m]",
+				displayName: "Opus",
+				supportsEffort: true,
+				supportedEffortLevels: ALL_EFFORTS,
+			},
+			{
+				value: "claude-fable-5[1m]",
+				displayName: "Fable",
+				supportsEffort: true,
+				supportedEffortLevels: ALL_EFFORTS,
+			},
+			{
+				value: "sonnet",
+				displayName: "Sonnet",
+				supportsEffort: true,
+				supportedEffortLevels: ALL_EFFORTS,
+			},
+			{
+				value: "haiku",
+				displayName: "Haiku",
+				supportsEffort: false,
+				supportedEffortLevels: ALL_EFFORTS,
+			},
+		]),
 	);
 
 	expect(models).toEqual([
-		{ id: "sonnet", label: "Sonnet", efforts: [] },
-		{ id: "opus", label: "Opus", efforts: [] },
-		{ id: "sonnet[1m]", label: "Sonnet (1M)", efforts: [] },
+		{ id: "opus[1m]", label: "Opus", efforts: ALL_EFFORTS },
+		{
+			id: "claude-fable-5[1m]",
+			label: "Fable",
+			efforts: ALL_EFFORTS,
+		},
+		{ id: "sonnet", label: "Sonnet", efforts: ALL_EFFORTS },
+		{ id: "haiku", label: "Haiku", efforts: [] },
 	]);
+});
 
-	const efforts = source.efforts;
-	if (!efforts) throw new Error("Claude effort discovery is not configured");
+test("Claude catalog uses the picker row's exact supported effort levels", () => {
 	expect(
-		efforts.decode(
-			JSON.stringify({
-				type: "result",
-				result: "Usage: /effort <low|medium|high|xhigh|max|ultracode|auto>",
-			}),
+		catalog().models.decode(
+			controlResponse([
+				{
+					value: "sonnet",
+					displayName: "Sonnet",
+					supportsEffort: true,
+					supportedEffortLevels: ["medium", "max"],
+				},
+			]),
 		),
-	).toEqual(["low", "medium", "high", "xhigh", "max", "ultracode", "auto"]);
+	).toEqual([{ id: "sonnet", label: "Sonnet", efforts: ["medium", "max"] }]);
+});
+
+test.each([
+	{
+		name: "malformed NDJSON",
+		output: "not json\n",
+	},
+	{
+		name: "a non-success response",
+		output: `${JSON.stringify({
+			type: "control_response",
+			response: {
+				subtype: "error",
+				request_id: "pincer-catalog",
+				error: "initialization failed",
+			},
+		})}\n`,
+	},
+	{
+		name: "a success response with malformed models",
+		output: controlResponse("not an array"),
+	},
+])("Claude catalog returns no models for $name", ({ output }) => {
+	expect(catalog().models.decode(output)).toEqual([]);
 });
 
 test("Claude turn invocation preserves opaque model and effort selections", () => {

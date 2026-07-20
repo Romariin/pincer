@@ -26,29 +26,81 @@ if (argv.includes("--version")) {
 	process.exit(0);
 }
 
-if (kind === "claude" && argv.includes("/model")) {
+const inputFormatFlag = argv.indexOf("--input-format");
+if (kind === "claude" && inputFormatFlag >= 0) {
+	const lines = (await Bun.stdin.text()).split("\n").filter(Boolean);
+	let request:
+		| {
+				type?: unknown;
+				request_id?: unknown;
+				request?: { subtype?: unknown; systemPrompt?: unknown };
+		  }
+		| undefined;
+	try {
+		if (lines.length !== 1) throw new Error("expected one NDJSON request");
+		request = JSON.parse(lines[0] ?? "{}");
+	} catch {
+		process.stderr.write("fake Claude requires one valid control request\n");
+		process.exit(64);
+	}
+	const systemPrompt = request?.request?.systemPrompt;
+	if (
+		argv[inputFormatFlag + 1] !== "stream-json" ||
+		request?.type !== "control_request" ||
+		request.request_id !== "pincer-catalog" ||
+		request.request?.subtype !== "initialize" ||
+		!Array.isArray(systemPrompt) ||
+		systemPrompt.length !== 1 ||
+		systemPrompt[0] !== ""
+	) {
+		process.stderr.write(
+			"fake Claude received an invalid initialize request\n",
+		);
+		process.exit(64);
+	}
+	const supportedEffortLevels = ["low", "medium", "high", "xhigh", "max"];
 	process.stdout.write(
-		JSON.stringify({
-			type: "result",
-			result:
-				"Current model: Sonnet\nUsage: /model <name>. Available: sonnet, opus, haiku, default, or a full model ID.",
-		}),
-	);
-	process.exit(0);
-}
-
-if (kind === "claude" && argv.includes("/effort")) {
-	const modelFlag = argv.indexOf("--model");
-	const model = modelFlag >= 0 ? argv[modelFlag + 1] : undefined;
-	const efforts =
-		model === "haiku"
-			? "low|medium|high"
-			: "low|medium|high|xhigh|max|ultracode";
-	process.stdout.write(
-		JSON.stringify({
-			type: "result",
-			result: `Usage: /effort <${efforts}>`,
-		}),
+		`${JSON.stringify({
+			type: "control_response",
+			response: {
+				subtype: "success",
+				request_id: "pincer-catalog",
+				response: {
+					models: [
+						{
+							value: "default",
+							displayName: "Default",
+							supportsEffort: true,
+							supportedEffortLevels,
+						},
+						{
+							value: "opus[1m]",
+							displayName: "Opus",
+							supportsEffort: true,
+							supportedEffortLevels,
+						},
+						{
+							value: "claude-fable-5[1m]",
+							displayName: "Fable",
+							supportsEffort: true,
+							supportedEffortLevels,
+						},
+						{
+							value: "sonnet",
+							displayName: "Sonnet",
+							supportsEffort: true,
+							supportedEffortLevels,
+						},
+						{
+							value: "haiku",
+							displayName: "Haiku",
+							supportsEffort: false,
+							supportedEffortLevels,
+						},
+					],
+				},
+			},
+		})}\n`,
 	);
 	process.exit(0);
 }
