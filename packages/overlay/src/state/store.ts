@@ -19,6 +19,7 @@ import { buildDomContext, resolveSource } from "@/dom/picker";
 
 export type View = "list" | "chat" | "settings";
 export type PickerKind = "harness" | "model" | "effort";
+export type ReferenceCopyStatus = "idle" | "selecting" | "copied" | "error";
 
 export interface Cfg {
 	harnessId: string;
@@ -62,6 +63,7 @@ export interface PendingPrompt {
 
 let nextMessageId = 0;
 let nextSelectionId = 0;
+let referenceCopyResetVersion = 0;
 
 function createMessageId(): number {
 	nextMessageId += 1;
@@ -74,7 +76,9 @@ export interface PincerStore {
 	view: View;
 	panelOpen: boolean;
 	selecting: boolean;
+	turnRunning: boolean;
 	picker: PickerKind | null;
+	referenceCopyStatus: ReferenceCopyStatus;
 
 	// ---- durable overlay settings ----
 	shortcut: KeyboardShortcut;
@@ -112,6 +116,9 @@ export interface PincerStore {
 	openSettings: () => void;
 	closePicker: () => void;
 	setSelecting: (on: boolean) => void;
+	setTurnRunning: (running: boolean) => void;
+	startCopyingReference: () => void;
+	finishCopyingReference: (status: "copied" | "error") => void;
 	prepareSettings: (
 		appRoot: string | null,
 		appOrigin: string | null,
@@ -413,7 +420,9 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		view: "list",
 		panelOpen: false,
 		selecting: false,
+		turnRunning: false,
 		picker: null,
+		referenceCopyStatus: "idle",
 
 		shortcut: DEFAULT_TOGGLE_SHORTCUT,
 		showFloatingButton: true,
@@ -458,6 +467,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				set({
 					panelOpen: false,
 					selecting: false,
+					referenceCopyStatus: "idle",
 					picker: null,
 					recordingShortcut: false,
 				});
@@ -474,11 +484,33 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				view: "settings",
 				picker: null,
 				selecting: false,
+				referenceCopyStatus: "idle",
 				recordingShortcut: false,
 			}),
 		openPicker: (kind) => set({ picker: kind }),
 		closePicker: () => set({ picker: null }),
-		setSelecting: (on) => set({ selecting: on }),
+		setSelecting: (on) => {
+			referenceCopyResetVersion += 1;
+			set({ selecting: on, referenceCopyStatus: "idle" });
+		},
+		setTurnRunning: (turnRunning) => set({ turnRunning }),
+		startCopyingReference: () => {
+			referenceCopyResetVersion += 1;
+			set({ selecting: true, referenceCopyStatus: "selecting" });
+		},
+		finishCopyingReference: (status) => {
+			set({ selecting: false, referenceCopyStatus: status });
+			referenceCopyResetVersion += 1;
+			const resetVersion = referenceCopyResetVersion;
+			setTimeout(() => {
+				if (
+					referenceCopyResetVersion === resetVersion &&
+					get().referenceCopyStatus === status
+				) {
+					set({ referenceCopyStatus: "idle" });
+				}
+			}, 1600);
+		},
 		prepareSettings: (appRoot, appOrigin, error) =>
 			set({
 				appRoot,

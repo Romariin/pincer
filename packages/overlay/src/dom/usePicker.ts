@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRoot } from "@/context/root";
 import { usePincerStore } from "@/state/store";
-import { place, type Rect } from "./picker";
+import { copyElementReference, place, type Rect } from "./picker";
 
 export interface PickerLayerState {
   hoverRect: Rect | null;
@@ -48,12 +48,20 @@ export function usePicker(): PickerLayerState {
       setHoverRect(target ? place(target) : null);
     };
     const onClick = (e: MouseEvent): void => {
-      if (!usePincerStore.getState().selecting) return;
+      const state = usePincerStore.getState();
+      if (!state.selecting) return;
       const target = overlayTarget(e);
       if (!target) return;
       e.preventDefault();
       e.stopPropagation();
-      usePincerStore.getState().toggleSelect(target);
+      if (state.referenceCopyStatus === "selecting") {
+        void copyElementReference(target).then(
+          () => state.finishCopyingReference("copied"),
+          () => state.finishCopyingReference("error"),
+        );
+        return;
+      }
+      state.toggleSelect(target);
     };
     const onReposition = (): void => recomputeSelections();
 

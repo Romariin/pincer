@@ -61,11 +61,14 @@ also omit the command entirely and front an already-running server). The daemon
 only binds `127.0.0.1` and rejects WebSocket connections from non-localhost
 browser origins.
 
-Open the printed Pincer proxy URL and use the floating crab launcher or press
-`Alt+Shift+P` (`Option+Shift+P` on macOS). Open Settings to choose one shortcut
-for every Pincer app or hide the launcher for the current app and site. Pincer
-keeps history, CLI sessions, and settings under `~/.pincer`, automatically
-migrates legacy project-local data, and requires no project `.gitignore` entry.
+Open the printed Pincer proxy URL. Use the launcher’s copy action to pick an
+element. Pincer copies its `file:line:column` when compatible source metadata is
+available and an agent-ready DOM reference otherwise. Open the panel to attach
+elements to a chat. Press `Alt+Shift+P` (`Option+Shift+P` on macOS) to
+toggle the panel. Open Settings to choose one shortcut for every Pincer app or
+hide the launcher for the current app and site. Pincer keeps history, CLI
+sessions, and settings under `~/.pincer`, automatically migrates legacy
+project-local data, and requires no project `.gitignore` entry.
 
 ## Bun runtime note for the optional `@pincer/vite-react` plugin
 

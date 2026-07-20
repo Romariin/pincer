@@ -108,6 +108,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: opts.port,
+		idleTimeout: 0,
 		fetch(req, bunServer) {
 			if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
 				const origin = req.headers.get("origin");
