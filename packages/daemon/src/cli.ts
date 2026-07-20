@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_PORT, DEFAULT_PROXY_PORT } from "@pincer/core";
 import { startDaemon } from "./server";
-import { runDev } from "./dev";
 
 const HELP = `pincer — click an element in your running app, describe a change, let your CLI Harness edit the source.
 
@@ -217,6 +216,9 @@ if (proxyMode) {
 		);
 		process.exit(1);
 	}
+	// Proxy mode owns the generated overlay asset. Loading it here keeps the
+	// daemon-only CLI independent of the overlay watcher's rebuild window.
+	const { runDev } = await import("./dev");
 	await runDev({
 		projectRoot,
 		daemonPort: port,
