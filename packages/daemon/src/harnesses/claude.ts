@@ -65,10 +65,12 @@ function decodeEfforts(stdout: string): string[] {
 function catalogInvocation(
 	command: string[],
 	slashCommand: "/model" | "/effort",
+	model?: string,
 ) {
 	return {
 		argv: [
 			...command,
+			...(model ? ["--model", model] : []),
 			"-p",
 			slashCommand,
 			"--output-format",
@@ -102,17 +104,17 @@ export const claudeHarness: HarnessDefinition = {
 	staticModels: [],
 	probeArgs: ["--version"],
 	catalog: {
-		build(command) {
-			return [
-				catalogInvocation(command, "/model"),
-				catalogInvocation(command, "/effort"),
-			];
+		models: {
+			build(command) {
+				return catalogInvocation(command, "/model");
+			},
+			decode: decodeModels,
 		},
-		decode(outputs) {
-			return {
-				models: decodeModels(outputs[0] ?? ""),
-				efforts: decodeEfforts(outputs[1] ?? ""),
-			};
+		efforts: {
+			build(command, model) {
+				return catalogInvocation(command, "/effort", model.id || "default");
+			},
+			decode: decodeEfforts,
 		},
 	},
 	buildTurn(request, command) {

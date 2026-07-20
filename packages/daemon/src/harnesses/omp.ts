@@ -40,48 +40,44 @@ export const ompHarness: HarnessDefinition = {
 	],
 	probeArgs: ["--version"],
 	catalog: {
-		build(command) {
-			return [{ argv: [...command, "models", "--json"] }];
-		},
-		decode(outputs) {
-			const parsed = record(JSON.parse(outputs[0] ?? ""));
-			if (!parsed || !Array.isArray(parsed.models))
-				return { models: [], efforts: [] };
-			const models: HarnessModel[] = parsed.models
-				.map((value): HarnessModel | null => {
-					const model = record(value);
-					if (!model) return null;
-					const id =
-						typeof model.selector === "string"
-							? model.selector
-							: typeof model.id === "string"
-								? model.id
-								: "";
-					if (!id) return null;
-					const label =
-						typeof model.name === "string"
-							? model.name
-							: typeof model.id === "string"
-								? model.id
-								: id;
-					const result: HarnessModel = { id, label };
-					if (Array.isArray(model.thinking)) {
-						const efforts = model.thinking.filter(
-							(effort): effort is string => typeof effort === "string",
-						);
-						if (efforts.length > 0) result.efforts = efforts;
-					}
-					return result;
-				})
-				.filter((model): model is HarnessModel => model !== null);
-			const efforts = [
-				...new Set(models.flatMap((model) => model.efforts ?? [])),
-			];
-			return {
-				models:
-					models.length > 0 ? [{ id: "", label: "Default" }, ...models] : [],
-				efforts,
-			};
+		models: {
+			build(command) {
+				return { argv: [...command, "models", "--json"] };
+			},
+			decode(output) {
+				const parsed = record(JSON.parse(output));
+				if (!parsed || !Array.isArray(parsed.models)) return [];
+				const models: HarnessModel[] = parsed.models
+					.map((value): HarnessModel | null => {
+						const model = record(value);
+						if (!model) return null;
+						const id =
+							typeof model.selector === "string"
+								? model.selector
+								: typeof model.id === "string"
+									? model.id
+									: "";
+						if (!id) return null;
+						const label =
+							typeof model.name === "string"
+								? model.name
+								: typeof model.id === "string"
+									? model.id
+									: id;
+						const result: HarnessModel = { id, label };
+						if (Array.isArray(model.thinking)) {
+							const efforts = model.thinking.filter(
+								(effort): effort is string => typeof effort === "string",
+							);
+							if (efforts.length > 0) result.efforts = efforts;
+						}
+						return result;
+					})
+					.filter((model): model is HarnessModel => model !== null);
+				return models.length > 0
+					? [{ id: "", label: "Default" }, ...models]
+					: [];
+			},
 		},
 	},
 

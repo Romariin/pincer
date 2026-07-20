@@ -552,7 +552,7 @@ test("cancel requests are sent only for the visible queued or running conversati
 	expect(requireThread("hidden").turnState).toBe("running");
 });
 
-test("welcome capabilities suppress unsupported choices and retain opaque current catalog values", () => {
+test("welcome retains opaque selections while model switches enforce explicit effort catalogs", () => {
 	resetStore();
 	const fixed = harness("fixed", {
 		label: "Fixed Harness",
@@ -569,20 +569,28 @@ test("welcome capabilities suppress unsupported choices and retain opaque curren
 	});
 	const selectable = harness("selectable", {
 		models: [
-			{ id: "known-model", label: "Known model", efforts: ["low", "high"] },
+			{
+				id: "supported-model",
+				label: "Supported model",
+				efforts: ["low", "high"],
+			},
+			{
+				id: "excluding-model",
+				label: "Excluding model",
+				efforts: ["low", "high"],
+			},
+			{ id: "uncatalogued-model", label: "Uncatalogued model" },
 		],
 		efforts: ["low", "high"],
-		defaultModel: "known-model",
+		defaultModel: "excluding-model",
 		defaultEffort: "high",
 	});
 
-	usePincerStore
-		.getState()
-		.updateCfg({
-			harnessId: "selectable",
-			model: "future-model",
-			effort: "quantum",
-		});
+	usePincerStore.getState().updateCfg({
+		harnessId: "selectable",
+		model: "future-model",
+		effort: "quantum",
+	});
 	apply(welcome([fixed, selectable]));
 
 	const state = usePincerStore.getState();
@@ -598,9 +606,21 @@ test("welcome capabilities suppress unsupported choices and retain opaque curren
 	expect(
 		modelEfforts(selectableInfo, state.draft.model, state.draft.effort),
 	).toEqual(["quantum", "low", "high"]);
-	state.choose("model", "known-model");
+	state.choose("model", "excluding-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
-		model: "known-model",
+		model: "excluding-model",
+		effort: "",
+	});
+	state.choose("effort", "high");
+	state.choose("model", "supported-model");
+	expect(usePincerStore.getState().draft).toMatchObject({
+		model: "supported-model",
+		effort: "high",
+	});
+	state.choose("effort", "quantum");
+	state.choose("model", "uncatalogued-model");
+	expect(usePincerStore.getState().draft).toMatchObject({
+		model: "uncatalogued-model",
 		effort: "quantum",
 	});
 	const fixedInfo = state.harnessMap.fixed;
@@ -638,13 +658,11 @@ test("switching Harness clears stale model and effort when the destination defau
 		defaultModel: "",
 		defaultEffort: "",
 	});
-	usePincerStore
-		.getState()
-		.updateCfg({
-			harnessId: "source",
-			model: "stale-model",
-			effort: "stale-effort",
-		});
+	usePincerStore.getState().updateCfg({
+		harnessId: "source",
+		model: "stale-model",
+		effort: "stale-effort",
+	});
 	apply(welcome([source, noAdvisoryDefaults]));
 
 	usePincerStore.getState().choose("harness", "no-advisory-defaults");

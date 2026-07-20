@@ -4,6 +4,7 @@ import type { ProcessTreeHandle } from "../processTree";
 import type {
 	HarnessDecodeResult,
 	HarnessCatalog,
+	HarnessInvocation,
 	HarnessDefinition,
 	HarnessRunOutcome,
 	HarnessTurnRequest,
@@ -67,6 +68,27 @@ async function readLines(
 	}
 }
 
+async function runCatalogInvocation(
+	invocation: HarnessInvocation,
+): Promise<string> {
+	const proc = Bun.spawn({
+		cmd: invocation.argv,
+		env: process.env,
+		stdin: invocation.stdin === undefined ? "ignore" : "pipe",
+		stdout: "pipe",
+		stderr: "ignore",
+		signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
+	});
+	if (invocation.stdin !== undefined && proc.stdin) {
+		proc.stdin.write(invocation.stdin);
+		proc.stdin.end();
+	}
+	const stdout = await readText(proc.stdout, 1_048_576);
+	if ((await proc.exited) !== 0)
+		throw new Error("Harness catalog command failed");
+	return stdout;
+}
+
 export class HarnessRunner {
 	static async detect(
 		definition: HarnessDefinition,
@@ -94,42 +116,45 @@ export class HarnessRunner {
 			models: [...definition.staticModels],
 			efforts: [...definition.efforts],
 		});
-		if (!definition.catalog) return fallback();
+		const source = definition.catalog;
+		if (!source) return fallback();
+
+		let models: HarnessCatalog["models"];
 		try {
-			const outputs = await Promise.all(
-				definition.catalog.build(command).map(async (invocation) => {
-					const proc = Bun.spawn({
-						cmd: invocation.argv,
-						env: process.env,
-						stdin: invocation.stdin === undefined ? "ignore" : "pipe",
-						stdout: "pipe",
-						stderr: "ignore",
-						signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
-					});
-					if (invocation.stdin !== undefined && proc.stdin) {
-						proc.stdin.write(invocation.stdin);
-						proc.stdin.end();
-					}
-					const stdout = await readText(proc.stdout, 1_048_576);
-					if ((await proc.exited) !== 0)
-						throw new Error("Harness catalog command failed");
-					return stdout;
-				}),
-			);
-			const catalog = definition.catalog.decode(outputs);
-			return {
-				models:
-					catalog.models.length > 0
-						? catalog.models
-						: [...definition.staticModels],
-				efforts:
-					catalog.efforts.length > 0
-						? catalog.efforts
-						: [...definition.efforts],
-			};
+			const output = await runCatalogInvocation(source.models.build(command));
+			const discovered = source.models.decode(output);
+			models =
+				discovered.length > 0 ? discovered : [...definition.staticModels];
 		} catch {
 			return fallback();
 		}
+
+		const effortSource = source.efforts;
+		if (effortSource) {
+			models = await Promise.all(
+				models.map(async (model) => {
+					try {
+						const output = await runCatalogInvocation(
+							effortSource.build(command, model),
+						);
+						return { ...model, efforts: effortSource.decode(output) };
+					} catch {
+						return { ...model, efforts: [] };
+					}
+				}),
+			);
+		}
+
+		const discoveredEfforts = [
+			...new Set(models.flatMap((model) => model.efforts ?? [])),
+		];
+		return {
+			models,
+			efforts:
+				discoveredEfforts.length > 0
+					? discoveredEfforts
+					: [...definition.efforts],
+		};
 	}
 
 	static async install(

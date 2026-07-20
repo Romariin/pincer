@@ -38,10 +38,16 @@ if (kind === "claude" && argv.includes("/model")) {
 }
 
 if (kind === "claude" && argv.includes("/effort")) {
+	const modelFlag = argv.indexOf("--model");
+	const model = modelFlag >= 0 ? argv[modelFlag + 1] : undefined;
+	const efforts =
+		model === "haiku"
+			? "low|medium|high"
+			: "low|medium|high|xhigh|max|ultracode";
 	process.stdout.write(
 		JSON.stringify({
 			type: "result",
-			result: "Usage: /effort <low|medium|high|xhigh|max>",
+			result: `Usage: /effort <${efforts}>`,
 		}),
 	);
 	process.exit(0);

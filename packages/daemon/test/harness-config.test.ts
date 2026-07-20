@@ -51,8 +51,22 @@ test("welcome exposes Claude's dynamically discovered models and efforts", async
 	expect(claude?.models).toContainEqual({
 		id: "haiku",
 		label: "Haiku",
+		efforts: ["low", "medium", "high"],
 	});
-	expect(claude?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+	expect(claude?.models).toContainEqual({
+		id: "sonnet",
+		label: "Sonnet",
+		efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+	});
+	expect(claude?.efforts).toEqual([
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+		"ultracode",
+	]);
+	expect(harness.invocations()).toEqual([]);
 });
 
 test("conversation selection preserves opaque model and effort values into the real OMP invocation", async () => {

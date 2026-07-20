@@ -581,7 +581,17 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				}
 				state.updateCfg(patch);
 			} else if (kind === "model") {
-				state.updateCfg({ model: value });
+				const info = harnessInfo(state.harnessMap, current.harnessId);
+				const model = info.models.find((candidate) => candidate.id === value);
+				const patch: Partial<Cfg> = { model: value };
+				if (
+					model?.efforts &&
+					current.effort &&
+					!model.efforts.includes(current.effort)
+				) {
+					patch.effort = "";
+				}
+				state.updateCfg(patch);
 			} else {
 				state.updateCfg({ effort: value });
 			}

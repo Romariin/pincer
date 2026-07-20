@@ -36,9 +36,19 @@ export interface HarnessCatalog {
 	efforts: string[];
 }
 
+export interface HarnessModelCatalogSource {
+	build(command: string[]): HarnessInvocation;
+	decode(output: string): HarnessModel[];
+}
+
+export interface HarnessEffortCatalogSource {
+	build(command: string[], model: HarnessModel): HarnessInvocation;
+	decode(output: string): string[];
+}
+
 export interface HarnessCatalogSource {
-	build(command: string[]): readonly HarnessInvocation[];
-	decode(outputs: readonly string[]): HarnessCatalog;
+	models: HarnessModelCatalogSource;
+	efforts?: HarnessEffortCatalogSource;
 }
 
 /** Daemon-private built-in extension contract. Harnesses describe vendor behavior only. */
