@@ -77,6 +77,7 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
   const server = Bun.serve<ProxyWsData>({
     hostname: "127.0.0.1",
     port: opts.port,
+    idleTimeout: 0,
     async fetch(req, srv) {
       const url = new URL(req.url);
 
