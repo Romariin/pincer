@@ -1,354 +1,537 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
-import { createHarness, FAKE_CLAUDE_SLOW, type Harness } from "./harness";
+import { PROTOCOL_VERSION, type ConversationConfig } from "@pincer/core";
+import { createHarness, type Harness } from "./harness";
 
 const V = PROTOCOL_VERSION;
-let h: Harness | undefined;
-
+let harness: Harness | undefined;
 setDefaultTimeout(30_000);
 
 afterEach(async () => {
-  await h?.close();
-  h = undefined;
+	await harness?.close();
+	harness = undefined;
 });
 
-async function startConversation(harness: Harness): Promise<string> {
-  harness.send({ v: V, type: "new_conversation" });
-  const started = await harness.next("conversation_started");
-  return started.conversation.id;
+async function startConversation(
+	current: Harness,
+	config: ConversationConfig = {},
+): Promise<string> {
+	current.send({ v: V, type: "new_conversation", ...config });
+	return (await current.next("conversation_started")).conversation.id;
 }
 
-async function runTurn(harness: Harness, convId: string, prompt: string): Promise<void> {
-  harness.send({
-    v: V,
-    type: "prompt",
-    conversationId: convId,
-    prompt,
-    source: harness.source,
-    domContext: harness.domContext,
-  });
-  await harness.next("turn_started");
-  await harness.next("turn_complete");
+function submitTurn(
+	current: Harness,
+	conversationId: string,
+	prompt: string,
+): void {
+	current.send({
+		v: V,
+		type: "prompt",
+		conversationId,
+		prompt,
+		source: current.source,
+		domContext: current.domContext,
+	});
 }
 
-function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> {
-  const db = new Database(harness.historyDbPath);
-  try {
-    const row = db
-      .query("SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1")
-      .get(convId);
-    if (!row || typeof row !== "object") throw new Error("no turn row found");
-    return row as Record<string, unknown>;
-  } finally {
-    db.close();
-  }
+async function completeTurn(
+	current: Harness,
+	conversationId: string,
+	prompt: string,
+): Promise<void> {
+	submitTurn(current, conversationId, prompt);
+	await current.nextWhere(
+		(message) =>
+			message.type === "turn_started" &&
+			message.conversationId === conversationId,
+	);
+	const complete = await current.nextWhere(
+		(message) =>
+			message.type === "turn_complete" &&
+			message.conversationId === conversationId,
+	);
+	expect(complete).toMatchObject({ type: "turn_complete", success: true });
 }
-async function getOverlaySettings(harness: Harness, appRoot: string, appOrigin: string) {
-  harness.send({ v: V, type: "get_overlay_settings", appRoot, appOrigin });
-  return harness.next("overlay_settings");
+
+function rows(
+	current: Harness,
+	sql: string,
+	...params: (string | number)[]
+): Record<string, unknown>[] {
+	const db = new Database(current.historyDbPath, { readonly: true });
+	try {
+		return db.query(sql).all(...params) as Record<string, unknown>[];
+	} finally {
+		db.close();
+	}
 }
 
+test("an explicit unknown or unavailable Harness blocks instead of falling back to detected OMP", async () => {
+	harness = await createHarness({ selectedHarnessId: "claude-code" });
+	const welcome = await harness.next("welcome");
+	expect(welcome.defaultHarnessId).toBeNull();
+	expect(welcome.harnesses.find((item) => item.id === "omp")?.detected).toBe(
+		true,
+	);
+	expect(
+		welcome.harnesses.find((item) => item.id === "claude-code")?.detected,
+	).toBe(false);
 
-test("happy turn edits the file in place and records the turn", async () => {
-  h = await createHarness();
-  const convId = await startConversation(h);
-  expect(h.gitOut(["branch"])).not.toContain("pincer/");
+	harness.send({ v: V, type: "new_conversation" });
+	expect(await harness.next("blocked")).toMatchObject({
+		reason: "harness_unavailable",
+	});
 
-  h.send({
-    v: V,
-    type: "prompt",
-    conversationId: convId,
-    prompt: h.userPrompt,
-    source: h.source,
-    domContext: h.domContext,
-  });
-  await h.next("turn_started");
-  const textEvent = await h.nextWhere((m) => m.type === "agent_output" && m.event.kind === "text");
-  expect(textEvent.type).toBe("agent_output");
-
-  const complete = await h.next("turn_complete");
-  expect(complete.success).toBe(true);
-  expect(complete.checkpoint).toBeNull();
-
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
-  const record = h.readRecord();
-  expect(record).toContain("src/App.tsx");
-  expect(record).toContain(h.userPrompt);
-
-  const turn = lastTurnRow(h, convId);
-  expect(turn.checkpoint).toBeNull();
-  expect(turn.agent_session_id).toBe("sess-1");
+	harness.send({ v: V, type: "new_conversation", harnessId: "not-a-harness" });
+	expect(await harness.next("blocked")).toMatchObject({
+		reason: "unknown_harness",
+	});
+	expect(harness.invocations()).toEqual([]);
 });
 
-test("revert is unavailable in direct-edit mode", async () => {
-  h = await createHarness();
-  const convId = await startConversation(h);
-  await runTurn(h, convId, h.userPrompt);
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
+test("one daemon slot runs FIFO across conversations and snapshots each queued Harness selection", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{
+					session: "first-session",
+					text: "first-ready",
+					waitFor: "release-first",
+					edits: [{ path: "src/App.tsx", append: "\n// FIRST_INTERVAL\n" }],
+				},
+				{
+					session: "second-session",
+					text: "second-ready",
+					waitFor: "release-second",
+					edits: [{ path: "src/App.tsx", append: "\n// SECOND_INTERVAL\n" }],
+				},
+			],
+		},
+	});
+	await harness.next("welcome");
+	const firstId = await startConversation(harness, {
+		harnessId: "omp",
+		model: "model-first",
+		effort: "effort-first",
+	});
+	const secondId = await startConversation(harness, {
+		harnessId: "omp",
+		model: "model-second",
+		effort: "effort-second",
+	});
 
-  h.send({ v: V, type: "revert", conversationId: convId });
-  const err = await h.next("error");
-  expect(err.message).toContain("direct-edit");
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
+	submitTurn(harness, firstId, "first prompt");
+	const firstStarted = await harness.nextWhere(
+		(message) =>
+			message.type === "turn_started" && message.conversationId === firstId,
+	);
+	expect(firstStarted).toMatchObject({
+		type: "turn_started",
+		liveTurn: {
+			state: "running",
+			queuePosition: null,
+			selection: { harnessId: "omp" },
+		},
+	});
+	await harness.nextWhere(
+		(message) =>
+			message.type === "harness_output" &&
+			message.conversationId === firstId &&
+			message.event.kind === "text" &&
+			message.event.text === "first-ready",
+	);
+
+	submitTurn(harness, secondId, "second prompt");
+	const queued = await harness.nextWhere(
+		(message) =>
+			message.type === "turn_queued" && message.conversationId === secondId,
+	);
+	expect(queued).toMatchObject({
+		type: "turn_queued",
+		liveTurn: {
+			turnId: null,
+			seq: null,
+			state: "queued",
+			queuePosition: 1,
+			prompt: "second prompt",
+			selection: {
+				harnessId: "omp",
+				model: "model-second",
+				effort: "effort-second",
+			},
+		},
+	});
+
+	submitTurn(harness, secondId, "must not replace the queued prompt");
+	expect(await harness.next("blocked")).toMatchObject({
+		reason: "outstanding_turn",
+		conversationId: secondId,
+	});
+	harness.send({
+		v: V,
+		type: "set_config",
+		conversationId: secondId,
+		model: "must-not-replace-snapshot",
+	});
+	expect(await harness.next("blocked")).toMatchObject({
+		reason: "outstanding_turn",
+		conversationId: secondId,
+	});
+
+	harness.send({ v: V, type: "list_conversations" });
+	const liveList = await harness.nextWhere(
+		(message) =>
+			message.type === "conversations" &&
+			message.items.some(
+				(item) => item.id === firstId && item.turnState === "running",
+			) &&
+			message.items.some(
+				(item) =>
+					item.id === secondId &&
+					item.turnState === "queued" &&
+					item.queuePosition === 1,
+			),
+	);
+	expect(liveList.type).toBe("conversations");
+
+	harness.release("release-first");
+	const firstAfterRelease = await harness.nextWhere(
+		(message) =>
+			(message.type === "turn_complete" &&
+				message.conversationId === firstId) ||
+			(message.type === "turn_started" && message.conversationId === secondId),
+	);
+	expect(firstAfterRelease).toMatchObject({
+		type: "turn_complete",
+		conversationId: firstId,
+	});
+	const secondStarted = await harness.nextWhere(
+		(message) =>
+			message.type === "turn_started" && message.conversationId === secondId,
+	);
+	expect(secondStarted).toMatchObject({
+		type: "turn_started",
+		liveTurn: {
+			prompt: "second prompt",
+			selection: {
+				harnessId: "omp",
+				model: "model-second",
+				effort: "effort-second",
+			},
+		},
+	});
+	harness.release("release-second");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "turn_complete" && message.conversationId === secondId,
+	);
+
+	const firstRow = rows(
+		harness,
+		"SELECT status, blocks FROM turns WHERE conversation_id = ?",
+		firstId,
+	)[0];
+	const secondRow = rows(
+		harness,
+		"SELECT status, blocks FROM turns WHERE conversation_id = ?",
+		secondId,
+	)[0];
+	expect(firstRow?.status).toBe("complete");
+	expect(secondRow?.status).toBe("complete");
+	expect(firstRow?.blocks).toContain("FIRST_INTERVAL");
+	expect(firstRow?.blocks).not.toContain("SECOND_INTERVAL");
+	expect(secondRow?.blocks).toContain("SECOND_INTERVAL");
+	expect(secondRow?.blocks).not.toContain("FIRST_INTERVAL");
 });
 
-test("accept closes the conversation without touching git", async () => {
-  h = await createHarness();
-  const headBefore = h.gitOut(["rev-parse", "HEAD"]).trim();
-  const convId = await startConversation(h);
-  await runTurn(h, convId, h.userPrompt);
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
+test("a running turn survives WebSocket disconnect and is replayed live after reconnect", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{
+					session: "survivor-session",
+					text: "still-running",
+					waitFor: "release-survivor",
+				},
+			],
+		},
+	});
+	await harness.next("welcome");
+	const conversationId = await startConversation(harness);
+	submitTurn(harness, conversationId, "survive navigation");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "harness_output" &&
+			message.conversationId === conversationId &&
+			message.event.kind === "text",
+	);
 
-  h.send({ v: V, type: "accept", conversationId: convId });
-  const accepted = await h.next("accepted");
-  expect(accepted.conversationId).toBe(convId);
-  expect(h.gitOut(["branch"])).not.toContain("pincer/");
-  expect(h.gitOut(["rev-parse", "HEAD"]).trim()).toBe(headBefore);
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
+	await harness.disconnect();
+	await harness.reconnect();
+	await harness.next("welcome");
+	harness.send({ v: V, type: "resume_conversation", conversationId });
+	const resumed = await harness.next("conversation_resumed");
+	expect(resumed.liveTurn).toMatchObject({
+		conversationId,
+		state: "running",
+		prompt: "survive navigation",
+		blocks: [{ t: "md", text: "still-running" }],
+	});
+
+	harness.release("release-survivor");
+	expect(await harness.next("turn_complete")).toMatchObject({
+		conversationId,
+		success: true,
+	});
 });
 
-test("discard closes the conversation and leaves the working tree edit intact", async () => {
-  h = await createHarness();
-  const convId = await startConversation(h);
-  await runTurn(h, convId, h.userPrompt);
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
+test("queued and running cancellation persist distinct cancelled turns", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{
+					session: "active-session",
+					text: "active-ready",
+					waitFor: "never-release-active",
+				},
+				{
+					session: "queued-session",
+					text: "queued-must-not-start",
+					waitFor: "never-release-queued",
+				},
+			],
+		},
+	});
+	await harness.next("welcome");
+	const activeId = await startConversation(harness);
+	const queuedId = await startConversation(harness);
+	submitTurn(harness, activeId, "active prompt");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "harness_output" &&
+			message.conversationId === activeId &&
+			message.event.kind === "text",
+	);
 
-  h.send({ v: V, type: "discard", conversationId: convId });
-  await h.next("discarded");
-  expect(h.gitOut(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
-  expect(h.gitOut(["branch"])).not.toContain("pincer/");
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
+	submitTurn(harness, queuedId, "queued prompt");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "turn_queued" && message.conversationId === queuedId,
+	);
+	harness.send({ v: V, type: "cancel", conversationId: queuedId });
+	const queuedCancelled = await harness.nextWhere(
+		(message) =>
+			message.type === "turn_cancelled" && message.conversationId === queuedId,
+	);
+	expect(queuedCancelled).toMatchObject({ type: "turn_cancelled" });
+	if (queuedCancelled.type !== "turn_cancelled")
+		throw new Error("expected queued cancellation");
+	expect(queuedCancelled.turnId).not.toBeNull();
+
+	harness.send({ v: V, type: "cancel", conversationId: activeId });
+	const activeCancelled = await harness.nextWhere(
+		(message) =>
+			message.type === "turn_cancelled" && message.conversationId === activeId,
+	);
+	expect(activeCancelled).toMatchObject({ type: "turn_cancelled" });
+
+	expect(
+		rows(
+			harness,
+			"SELECT conversation_id, status FROM turns WHERE conversation_id IN (?, ?) ORDER BY conversation_id",
+			activeId,
+			queuedId,
+		),
+	).toEqual(
+		[
+			{ conversation_id: activeId, status: "cancelled" },
+			{ conversation_id: queuedId, status: "cancelled" },
+		].sort((left, right) =>
+			left.conversation_id.localeCompare(right.conversation_id),
+		),
+	);
 });
 
-test("new_conversation succeeds even with a dirty working tree", async () => {
-  h = await createHarness();
-  h.dirtyTarget();
+test("delete waits for process-tree cancellation before removing conversation rows", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{
+					text: "delete-ready",
+					waitFor: "never-release-delete",
+					spawnChildPidFile: "delete-child.pid",
+				},
+			],
+		},
+	});
+	await harness.next("welcome");
+	const conversationId = await startConversation(harness);
+	submitTurn(harness, conversationId, "delete while running");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "harness_output" &&
+			message.conversationId === conversationId &&
+			message.event.kind === "text",
+	);
+	const childPid = Number(
+		readFileSync(join(harness.fakeRoot, "delete-child.pid"), "utf8"),
+	);
 
-  h.send({ v: V, type: "new_conversation" });
-  const started = await h.next("conversation_started");
-  expect(started.conversation.id).toBeTruthy();
-  expect(started.conversation.branch).not.toContain("pincer/");
+	harness.send({ v: V, type: "delete_conversation", conversationId });
+	expect(await harness.next("deleted")).toMatchObject({ conversationId });
+	expect(() => process.kill(childPid, 0)).toThrow();
+	expect(
+		rows(harness, "SELECT id FROM conversations WHERE id = ?", conversationId),
+	).toEqual([]);
+	expect(
+		rows(
+			harness,
+			"SELECT id FROM turns WHERE conversation_id = ?",
+			conversationId,
+		),
+	).toEqual([]);
 });
 
-test("no detected agent yields welcome{defaultHarnessId:null} and blocks prompts", async () => {
-  h = await createHarness({ agentCommand: ["definitely-not-a-binary-xyz"], agentId: "claude-code" });
-  const welcome = await h.next("welcome");
-  expect(welcome.defaultHarnessId).toBeNull();
+test("daemon shutdown cancels both the active process and every queued turn before closing SQLite", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{ text: "shutdown-active", waitFor: "never-release-shutdown" },
+				{ text: "shutdown-queued", waitFor: "never-release-queued" },
+			],
+		},
+	});
+	await harness.next("welcome");
+	const activeId = await startConversation(harness);
+	const queuedId = await startConversation(harness);
+	submitTurn(harness, activeId, "active during shutdown");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "harness_output" &&
+			message.conversationId === activeId &&
+			message.event.kind === "text",
+	);
+	submitTurn(harness, queuedId, "queued during shutdown");
+	await harness.nextWhere(
+		(message) =>
+			message.type === "turn_queued" && message.conversationId === queuedId,
+	);
 
-  const convId = await startConversation(h);
-  h.send({ v: V, type: "prompt", conversationId: convId, prompt: "x", source: null, domContext: h.domContext });
-  const blocked = await h.next("blocked");
-  expect(blocked.reason).toBe("no_agent");
+	await harness.restart();
+	expect(
+		rows(
+			harness,
+			"SELECT conversation_id, status FROM turns WHERE conversation_id IN (?, ?) ORDER BY conversation_id",
+			activeId,
+			queuedId,
+		),
+	).toEqual(
+		[
+			{ conversation_id: activeId, status: "cancelled" },
+			{ conversation_id: queuedId, status: "cancelled" },
+		].sort((left, right) =>
+			left.conversation_id.localeCompare(right.conversation_id),
+		),
+	);
 });
 
-test("cancel kills the running turn and leaves the file unchanged", async () => {
-  h = await createHarness({ agentCommand: ["bun", FAKE_CLAUDE_SLOW] });
-  const convId = await startConversation(h);
-  h.send({
-    v: V,
-    type: "prompt",
-    conversationId: convId,
-    prompt: h.userPrompt,
-    source: h.source,
-    domContext: h.domContext,
-  });
-  await h.next("turn_started");
+test("resume tokens are reused only across consecutive turns owned by the same Harness", async () => {
+	harness = await createHarness({
+		enableFakeClaude: true,
+		plan: {
+			executions: [
+				{ session: "omp-token", text: "omp first" },
+				{ session: "claude-token", text: "claude first" },
+				{ session: "claude-token-2", text: "claude second" },
+				{ session: "omp-token-2", text: "omp after claude" },
+			],
+		},
+	});
+	await harness.next("welcome");
+	const conversationId = await startConversation(harness, { harnessId: "omp" });
+	await completeTurn(harness, conversationId, "omp first");
 
-  h.send({ v: V, type: "cancel", conversationId: convId });
-  const done = await h.nextWhere((m) => m.type === "turn_complete" || m.type === "turn_error");
-  if (done.type === "turn_complete") expect(done.success).toBe(false);
+	harness.send({
+		v: V,
+		type: "set_config",
+		conversationId,
+		harnessId: "claude-code",
+	});
+	await harness.next("config_updated");
+	await completeTurn(harness, conversationId, "claude first");
+	await completeTurn(harness, conversationId, "claude second");
 
-  expect(h.readTarget()).not.toContain("PINCER_EDIT_MARKER");
-  const turn = lastTurnRow(h, convId);
-  expect(turn.status).toBe("cancelled");
+	harness.send({ v: V, type: "set_config", conversationId, harnessId: "omp" });
+	await harness.next("config_updated");
+	await completeTurn(harness, conversationId, "omp after claude");
+
+	const invocations = harness.invocations();
+	expect(invocations.map((invocation) => invocation.kind)).toEqual([
+		"omp",
+		"claude",
+		"claude",
+		"omp",
+	]);
+	expect(invocations[0]?.argv).not.toContain("-r");
+	expect(invocations[1]?.argv).not.toContain("--resume");
+	const claudeResume = invocations[2]?.argv.indexOf("--resume") ?? -1;
+	expect(invocations[2]?.argv[claudeResume + 1]).toBe("claude-token");
+	expect(invocations[3]?.argv).not.toContain("-r");
+
+	expect(
+		rows(
+			harness,
+			"SELECT harness_id, resume_token, status FROM turns WHERE conversation_id = ? ORDER BY seq",
+			conversationId,
+		),
+	).toEqual([
+		{ harness_id: "omp", resume_token: "omp-token", status: "complete" },
+		{
+			harness_id: "claude-code",
+			resume_token: "claude-token",
+			status: "complete",
+		},
+		{
+			harness_id: "claude-code",
+			resume_token: "claude-token-2",
+			status: "complete",
+		},
+		{ harness_id: "omp", resume_token: "omp-token-2", status: "complete" },
+	]);
 });
 
-test("daemon shutdown cancels an active Claude turn before closing history", async () => {
-  h = await createHarness({ agentCommand: ["bun", FAKE_CLAUDE_SLOW] });
-  const convId = await startConversation(h);
-  h.send({
-    v: V,
-    type: "prompt",
-    conversationId: convId,
-    prompt: h.userPrompt,
-    source: h.source,
-    domContext: h.domContext,
-  });
-  await h.next("turn_started");
+test("live Harness text is bounded and the truncated snapshot is what resume and SQLite expose", async () => {
+	harness = await createHarness({
+		plan: { executions: [{ session: "large-output", textChars: 300_000 }] },
+	});
+	await harness.next("welcome");
+	const conversationId = await startConversation(harness);
+	submitTurn(harness, conversationId, "produce large output");
+	const output = await harness.nextWhere(
+		(message) =>
+			message.type === "harness_output" &&
+			message.conversationId === conversationId &&
+			message.event.kind === "text",
+	);
+	if (output.type !== "harness_output" || output.event.kind !== "text") {
+		throw new Error("expected Harness text output");
+	}
+	expect(output.event.text.length).toBeLessThan(257_000);
+	expect(output.event.text).toEndWith("[Live output truncated]");
+	await harness.next("turn_complete");
 
-  await h.restart();
-
-  expect(lastTurnRow(h, convId).status).toBe("cancelled");
-  expect(h.readTarget()).not.toContain("PINCER_EDIT_MARKER");
-});
-
-test("a second turn resumes the prior agent session", async () => {
-  h = await createHarness();
-  const convId = await startConversation(h);
-  await runTurn(h, convId, "first change");
-  await runTurn(h, convId, "second change");
-
-  const record = h.readRecord();
-  expect(record).toContain("--resume");
-  expect(record).toContain("sess-1");
-});
-
-test("restart skips an interrupted turn and resumes the last completed Claude session", async () => {
-  h = await createHarness();
-  const convId = await startConversation(h);
-  await runTurn(h, convId, "completed change");
-
-  const db = new Database(h.historyDbPath);
-  try {
-    db.query(
-      `INSERT INTO turns
-        (conversation_id, seq, prompt, source, dom_context, agent_session_id,
-         checkpoint, parent_checkpoint, output, blocks, status, created_at)
-       VALUES (?, 2, 'interrupted', NULL, '{}', NULL, NULL, NULL, NULL, NULL, 'running', ?)`,
-    ).run(convId, Date.now());
-  } finally {
-    db.close();
-  }
-
-  await h.restart();
-  expect(lastTurnRow(h, convId).status).toBe("error");
-
-  await runTurn(h, convId, "after restart");
-  expect(h.readRecord()).toContain("--resume");
-  expect(h.readRecord()).toContain("sess-1");
-});
-
-test("history survives a daemon restart", async () => {
-  h = await createHarness();
-  const convId = await startConversation(h);
-  await runTurn(h, convId, h.userPrompt);
-
-  await h.restart();
-  h.send({ v: V, type: "list_conversations" });
-  const list = await h.next("conversations");
-  const found = list.items.find((c) => c.id === convId);
-  expect(found).toBeDefined();
-  expect(found?.turnCount).toBe(1);
-});
-
-test("global shortcuts and app-origin launcher settings persist at their intended scopes", async () => {
-  const sharedDataRoot = mkdtempSync(join(tmpdir(), "pincer-shared-settings-"));
-  let a: Harness | undefined;
-  let b: Harness | undefined;
-  const origin = "http://localhost:5173";
-  const shortcut = { code: "KeyK", alt: false, ctrl: true, shift: true, meta: false };
-  try {
-    a = await createHarness({ dataRoot: sharedDataRoot });
-    b = await createHarness({ dataRoot: sharedDataRoot });
-
-    a.send({
-      v: V,
-      type: "update_overlay_settings",
-      appRoot: a.dir,
-      appOrigin: origin,
-      shortcut,
-      showFloatingButton: false,
-    });
-    const aUpdated = await a.next("overlay_settings");
-    expect(aUpdated.settings.shortcut).toEqual(shortcut);
-    expect(aUpdated.settings.showFloatingButton).toBe(false);
-    await expect(b.next("overlay_settings", 250)).rejects.toThrow("timed out");
-
-    await b.restart();
-    const bSettings = await getOverlaySettings(b, b.dir, origin);
-    expect(bSettings.settings.shortcut).toEqual(shortcut);
-    expect(bSettings.settings.showFloatingButton).toBe(true);
-
-    const appOne = join(a.dir, "apps", "one");
-    const appTwo = join(a.dir, "apps", "two");
-    mkdirSync(appOne, { recursive: true });
-    mkdirSync(appTwo, { recursive: true });
-    a.send({
-      v: V,
-      type: "update_overlay_settings",
-      appRoot: appOne,
-      appOrigin: origin,
-      showFloatingButton: false,
-    });
-    const appOneUpdated = await a.next("overlay_settings");
-    expect(appOneUpdated.settings.showFloatingButton).toBe(false);
-    const appTwoSettings = await getOverlaySettings(a, appTwo, origin);
-    expect(appTwoSettings.settings.showFloatingButton).toBe(true);
-
-    await a.restart();
-    const persisted = await getOverlaySettings(a, appOne, origin);
-    expect(persisted.settings.shortcut).toEqual(shortcut);
-    expect(persisted.settings.showFloatingButton).toBe(false);
-    const otherPort = await getOverlaySettings(a, appOne, "http://localhost:5174/path?x=1#hash");
-    expect(otherPort.settings.shortcut).toEqual(shortcut);
-    expect(otherPort.settings.showFloatingButton).toBe(true);
-    expect(otherPort.settings.appOrigin).toBe("http://localhost:5174");
-  } finally {
-    await a?.close();
-    await b?.close();
-    rmSync(sharedDataRoot, { recursive: true, force: true });
-  }
-});
-
-test("settings protocol rejects invalid scope and patches without changing stored values", async () => {
-  h = await createHarness();
-  const origin = "http://localhost:5173";
-
-  h.send({
-    v: V,
-    type: "get_overlay_settings",
-    appRoot: h.dataRoot,
-    appOrigin: origin,
-  });
-  expect(await h.next("error")).toMatchObject({
-    code: "bad_message",
-    message: "Invalid app root.",
-  });
-
-  h.send({
-    v: V,
-    type: "update_overlay_settings",
-    appRoot: h.dir,
-    appOrigin: origin,
-  });
-  expect(await h.next("error")).toMatchObject({
-    code: "bad_message",
-    message: "Invalid overlay settings update.",
-  });
-
-  for (const shortcut of [
-    { code: "KeyK", alt: false, ctrl: false, shift: true, meta: false },
-    { code: "AltLeft", alt: true, ctrl: false, shift: false, meta: false },
-  ]) {
-    h.send({
-      v: V,
-      type: "update_overlay_settings",
-      appRoot: h.dir,
-      appOrigin: origin,
-      shortcut,
-    });
-    expect(await h.next("error")).toMatchObject({
-      code: "bad_message",
-      message: "Invalid overlay settings update.",
-    });
-  }
-
-  h.send({
-    v: V,
-    type: "get_overlay_settings",
-    appRoot: h.dir,
-    appOrigin: "file:///tmp/index.html",
-  });
-  expect(await h.next("error")).toMatchObject({
-    code: "bad_message",
-    message: "Invalid app origin.",
-  });
-
-  const settings = await getOverlaySettings(h, h.dir, origin);
-  expect(settings.settings.shortcut).toEqual(DEFAULT_TOGGLE_SHORTCUT);
-  expect(settings.settings.showFloatingButton).toBe(true);
+	harness.send({ v: V, type: "resume_conversation", conversationId });
+	const resumed = await harness.next("conversation_resumed");
+	expect(resumed.liveTurn).toBeNull();
+	expect(resumed.turns[0]?.output).toBe(output.event.text);
+	expect(
+		rows(
+			harness,
+			"SELECT output FROM turns WHERE conversation_id = ?",
+			conversationId,
+		),
+	).toEqual([{ output: output.event.text }]);
 });
