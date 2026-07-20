@@ -14,7 +14,7 @@ import {
 } from "@pincer/core";
 import { Git } from "./git";
 import { Store } from "./store";
-import { resolveHarnesses } from "./harnesses/registry";
+import { harnessDescriptors, resolveHarnesses } from "./harnesses/registry";
 import { Orchestrator } from "./orchestrator";
 import type { Emit } from "./orchestrator";
 import {
@@ -101,7 +101,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 		daemonVersion: DAEMON_VERSION,
 		protocolVersion: PROTOCOL_VERSION,
 		projectRoot: opts.projectRoot,
-		harnesses: orchestrator.harnessDescriptors(),
+		harnesses: harnessDescriptors(resolved.harnesses),
 		defaultHarnessId: orchestrator.defaultHarnessId,
 	};
 

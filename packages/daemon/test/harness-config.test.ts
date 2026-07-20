@@ -38,6 +38,23 @@ test("welcome exposes protocol-v3 Harness capabilities and discovered model cata
 	});
 });
 
+test("welcome exposes Claude's dynamically discovered models and efforts", async () => {
+	harness = await createHarness({
+		enableFakeClaude: true,
+		selectedHarnessId: "claude-code",
+	});
+	const welcome = await harness.next("welcome");
+	const claude = welcome.harnesses.find(
+		(candidate) => candidate.id === "claude-code",
+	);
+
+	expect(claude?.models).toContainEqual({
+		id: "haiku",
+		label: "Haiku",
+	});
+	expect(claude?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+});
+
 test("conversation selection preserves opaque model and effort values into the real OMP invocation", async () => {
 	harness = await createHarness();
 	await harness.next("welcome");

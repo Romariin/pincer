@@ -4,7 +4,6 @@ import {
 	type ConversationSummary,
 	type DiffHunk,
 	type DomContext,
-	type HarnessDescriptor,
 	type HarnessEvent,
 	type MessageBlock,
 	type PromptElement,
@@ -70,22 +69,6 @@ export class Orchestrator {
 
 	get defaultHarnessId(): string | null {
 		return this.configuredDefaultHarnessId;
-	}
-
-	harnessDescriptors(): HarnessDescriptor[] {
-		return this.harnesses.map(({ definition, detected, models }) => ({
-			id: definition.id,
-			...definition.display,
-			detected,
-			capabilities: { ...definition.capabilities },
-			models: models.map((model) => ({
-				...model,
-				efforts: model.efforts ? [...model.efforts] : undefined,
-			})),
-			defaultModel: definition.defaultModel,
-			efforts: [...definition.efforts],
-			defaultEffort: definition.defaultEffort,
-		}));
 	}
 
 	listConversations(): ServerMessage {
