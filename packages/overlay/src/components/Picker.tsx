@@ -91,10 +91,8 @@ function HarnessCombobox({ container }: { container: Container }): ReactNode {
 							<span className="min-w-0 flex-1 truncate">{harness.label}</span>
 							<span className="text-[11px] text-muted-foreground">
 								{!harness.detected
-									? "not installed"
-									: harness.capabilities.modelSelection
-										? `${harness.models.length} model${harness.models.length === 1 ? "" : "s"}`
-										: "available"}
+									? "unavailable"
+									: `${harness.models.length} model${harness.models.length === 1 ? "" : "s"}`}
 							</span>
 						</ComboboxItem>
 					)}
@@ -263,12 +261,12 @@ export function Picker({ container }: { container: Container }): ReactNode {
 					<Section label="HARNESS">
 						<HarnessCombobox container={container} />
 					</Section>
-					{info.capabilities.modelSelection ? (
+					{info.models.length > 0 ? (
 						<Section label="MODEL">
 							<ModelCombobox container={container} />
 						</Section>
 					) : null}
-					{info.capabilities.effortSelection && effortList.length > 1 ? (
+					{effortList.length > 1 ? (
 						<Section label="EFFORT">
 							<EffortSlider
 								list={effortList}

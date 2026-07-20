@@ -94,13 +94,9 @@ export function harnessDescriptors(
 		id: harness.definition.id,
 		...harness.definition.display,
 		detected: harness.detected,
-		capabilities: { ...harness.definition.capabilities },
 		models: harness.models.map((model) => ({
 			...model,
-			...(model.efforts ? { efforts: [...model.efforts] } : {}),
+			efforts: [...model.efforts],
 		})),
-		defaultModel: harness.definition.defaultModel,
-		efforts: [...harness.efforts],
-		defaultEffort: harness.definition.defaultEffort,
 	}));
 }

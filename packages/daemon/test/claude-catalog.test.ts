@@ -47,18 +47,17 @@ test("Claude catalog builds staged model and model-qualified effort queries", ()
 	const efforts = source.efforts;
 	if (!efforts) throw new Error("Claude effort discovery is not configured");
 	expectEffortQuery(
-		efforts.build(command, { id: "haiku", label: "Haiku" }).argv,
+		efforts.build(command, {
+			id: "haiku",
+			label: "Haiku",
+			efforts: [],
+		}).argv,
 		command,
 		"haiku",
 	);
-	expectEffortQuery(
-		efforts.build(command, { id: "", label: "Default" }).argv,
-		command,
-		"default",
-	);
 });
 
-test("Claude catalog decodes model aliases and a model's advertised efforts", () => {
+test("Claude catalog filters the default alias and decodes each model's advertised efforts", () => {
 	const source = catalog();
 	const models = source.models.decode(
 		JSON.stringify({
@@ -68,16 +67,11 @@ test("Claude catalog decodes model aliases and a model's advertised efforts", ()
 		}),
 	);
 
-	expect(models.map(({ id }) => id)).toEqual([
-		"",
-		"sonnet",
-		"opus",
-		"sonnet[1m]",
+	expect(models).toEqual([
+		{ id: "sonnet", label: "Sonnet", efforts: [] },
+		{ id: "opus", label: "Opus", efforts: [] },
+		{ id: "sonnet[1m]", label: "Sonnet (1M)", efforts: [] },
 	]);
-	expect(models.find(({ id }) => id === "")).toEqual({
-		id: "",
-		label: "Default",
-	});
 
 	const efforts = source.efforts;
 	if (!efforts) throw new Error("Claude effort discovery is not configured");

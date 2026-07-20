@@ -1,7 +1,12 @@
 import type { ReactNode } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { usePincerStore, useCfg } from "@/state/store";
-import { effortLabel, harnessInfo, modelLabel } from "@/lib/harness";
+import {
+	effortLabel,
+	harnessInfo,
+	modelEfforts,
+	modelLabel,
+} from "@/lib/harness";
 import { Avatar } from "./Avatar";
 
 export function CommandBar(): ReactNode {
@@ -9,6 +14,7 @@ export function CommandBar(): ReactNode {
 	const harnessMap = usePincerStore((s) => s.harnessMap);
 	const openPicker = usePincerStore((s) => s.openPicker);
 	const info = harnessInfo(harnessMap, cfg.harnessId);
+	const efforts = modelEfforts(info, cfg.model, cfg.effort);
 
 	return (
 		<button
@@ -20,7 +26,7 @@ export function CommandBar(): ReactNode {
 			<span className="shrink-0 font-semibold text-foreground">
 				{info.label}
 			</span>
-			{info.capabilities.modelSelection ? (
+			{info.models.length > 0 && cfg.model ? (
 				<>
 					<ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" />
 					<span className="min-w-0 truncate text-muted-foreground">
@@ -28,7 +34,7 @@ export function CommandBar(): ReactNode {
 					</span>
 				</>
 			) : null}
-			{info.capabilities.effortSelection ? (
+			{efforts.length > 0 && cfg.effort ? (
 				<>
 					<ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" />
 					<span className="shrink-0 font-semibold text-primary">

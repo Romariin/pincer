@@ -36,17 +36,16 @@ function decodeModels(stdout: string): HarnessModel[] {
 	if (!available) return [];
 	const models = new Map<string, HarnessModel>();
 	for (const alias of available.split(",").map((value) => value.trim())) {
-		if (!alias) continue;
-		const id = alias === "default" ? "" : alias;
-		if (!models.has(id)) {
-			models.set(id, { id, label: id ? modelLabel(id) : "Default" });
+		if (!alias || alias === "default") continue;
+		if (!models.has(alias)) {
+			models.set(alias, {
+				id: alias,
+				label: modelLabel(alias),
+				efforts: [],
+			});
 		}
 	}
-	const defaultModel = models.get("");
-	if (defaultModel) models.delete("");
-	return defaultModel
-		? [defaultModel, ...models.values()]
-		: [...models.values()];
+	return [...models.values()];
 }
 
 function decodeEfforts(stdout: string): string[] {
@@ -92,16 +91,6 @@ export const claudeHarness: HarnessDefinition = {
 		icon: CLAUDE_ICON,
 	},
 	defaultCommand: ["claude"],
-	capabilities: {
-		modelSelection: true,
-		effortSelection: true,
-		modelDiscovery: true,
-		sessionResume: true,
-	},
-	defaultModel: "",
-	defaultEffort: "",
-	efforts: [],
-	staticModels: [],
 	probeArgs: ["--version"],
 	catalog: {
 		models: {
@@ -112,7 +101,7 @@ export const claudeHarness: HarnessDefinition = {
 		},
 		efforts: {
 			build(command, model) {
-				return catalogInvocation(command, "/effort", model.id || "default");
+				return catalogInvocation(command, "/effort", model.id);
 			},
 			decode: decodeEfforts,
 		},

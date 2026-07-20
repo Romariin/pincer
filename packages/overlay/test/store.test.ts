@@ -9,7 +9,6 @@ import type {
 	ServerMessage,
 	TurnSummary,
 } from "@pincer/core";
-import { modelEfforts, modelLabel } from "../src/lib/harness";
 import {
 	selectVisibleTurnState,
 	usePincerStore,
@@ -115,16 +114,7 @@ function harness(
 		c1: "#111111",
 		c2: "#222222",
 		detected: true,
-		capabilities: {
-			modelSelection: true,
-			effortSelection: true,
-			modelDiscovery: true,
-			sessionResume: true,
-		},
 		models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }],
-		defaultModel: "gpt-5",
-		efforts: ["low", "high"],
-		defaultEffort: "high",
 		...overrides,
 	};
 }
@@ -552,21 +542,72 @@ test("cancel requests are sent only for the visible queued or running conversati
 	expect(requireThread("hidden").turnState).toBe("running");
 });
 
-test("welcome retains opaque selections while model switches enforce explicit effort catalogs", () => {
+test("welcome initializes a new draft from the first catalog model with no effort", () => {
 	resetStore();
-	const fixed = harness("fixed", {
-		label: "Fixed Harness",
-		capabilities: {
-			modelSelection: false,
-			effortSelection: false,
-			modelDiscovery: false,
-			sessionResume: false,
-		},
-		models: [{ id: "internal-model", label: "Internal model" }],
-		efforts: ["internal-effort"],
-		defaultModel: "internal-model",
-		defaultEffort: "internal-effort",
+	const selectable = harness("selectable", {
+		models: [
+			{ id: "catalog-first", label: "Catalog first", efforts: ["low"] },
+			{ id: "catalog-second", label: "Catalog second", efforts: ["high"] },
+		],
 	});
+
+	apply(welcome([selectable]));
+
+	expect(usePincerStore.getState().draft).toEqual({
+		harnessId: "selectable",
+		model: "catalog-first",
+		effort: "",
+	});
+});
+
+test("welcome repairs a legacy empty model from the catalog without inventing an effort", () => {
+	resetStore();
+	const selectable = harness("selectable", {
+		models: [
+			{ id: "catalog-first", label: "Catalog first", efforts: ["low"] },
+			{ id: "catalog-second", label: "Catalog second", efforts: ["high"] },
+		],
+	});
+	usePincerStore.getState().updateCfg({
+		harnessId: "selectable",
+		model: "",
+		effort: "legacy-default",
+	});
+
+	apply(welcome([selectable]));
+
+	expect(usePincerStore.getState().draft).toEqual({
+		harnessId: "selectable",
+		model: "catalog-first",
+		effort: "",
+	});
+});
+
+test("welcome retains a nonempty opaque persisted model without supplying an effort", () => {
+	resetStore();
+	const selectable = harness("selectable", {
+		models: [
+			{ id: "catalog-first", label: "Catalog first", efforts: ["low"] },
+			{ id: "catalog-second", label: "Catalog second", efforts: ["high"] },
+		],
+	});
+	usePincerStore.getState().updateCfg({
+		harnessId: "selectable",
+		model: "future-model",
+		effort: "",
+	});
+
+	apply(welcome([selectable]));
+
+	expect(usePincerStore.getState().draft).toEqual({
+		harnessId: "selectable",
+		model: "future-model",
+		effort: "",
+	});
+});
+
+test("model switches enforce catalog efforts while retaining opaque selections", () => {
+	resetStore();
 	const selectable = harness("selectable", {
 		models: [
 			{
@@ -577,59 +618,41 @@ test("welcome retains opaque selections while model switches enforce explicit ef
 			{
 				id: "excluding-model",
 				label: "Excluding model",
-				efforts: ["low", "high"],
+				efforts: ["low"],
 			},
-			{ id: "uncatalogued-model", label: "Uncatalogued model" },
+			{ id: "no-effort-model", label: "No effort model", efforts: [] },
 		],
-		efforts: ["low", "high"],
-		defaultModel: "excluding-model",
-		defaultEffort: "high",
 	});
-
-	usePincerStore.getState().updateCfg({
-		harnessId: "selectable",
-		model: "future-model",
-		effort: "quantum",
-	});
-	apply(welcome([fixed, selectable]));
+	apply(welcome([selectable]));
 
 	const state = usePincerStore.getState();
-	expect(state.draft).toEqual({
-		harnessId: "selectable",
-		model: "future-model",
-		effort: "quantum",
-	});
-	const selectableInfo = state.harnessMap.selectable;
-	if (!selectableInfo)
-		throw new Error("expected the selectable Harness descriptor");
-	expect(modelLabel(selectableInfo, state.draft.model)).toBe("future-model");
-	expect(
-		modelEfforts(selectableInfo, state.draft.model, state.draft.effort),
-	).toEqual(["quantum", "low", "high"]);
+	state.choose("effort", "high");
 	state.choose("model", "excluding-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
 		model: "excluding-model",
 		effort: "",
 	});
-	state.choose("effort", "high");
+
+	state.choose("effort", "low");
 	state.choose("model", "supported-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
 		model: "supported-model",
-		effort: "high",
+		effort: "low",
 	});
+
 	state.choose("effort", "quantum");
-	state.choose("model", "uncatalogued-model");
+	state.choose("model", "no-effort-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
-		model: "uncatalogued-model",
+		model: "no-effort-model",
+		effort: "",
+	});
+
+	state.choose("effort", "quantum");
+	state.choose("model", "future-model");
+	expect(usePincerStore.getState().draft).toMatchObject({
+		model: "future-model",
 		effort: "quantum",
 	});
-	const fixedInfo = state.harnessMap.fixed;
-	if (!fixedInfo) throw new Error("expected the fixed Harness descriptor");
-	const visibleControls = [
-		...(fixedInfo.capabilities.modelSelection ? ["model"] : []),
-		...(fixedInfo.capabilities.effortSelection ? ["effort"] : []),
-	];
-	expect(visibleControls).toEqual([]);
 });
 
 test("an explicit null default Harness never falls back to another detected Harness", () => {
@@ -649,27 +672,31 @@ test("an explicit null default Harness never falls back to another detected Harn
 	expect(usePincerStore.getState().draft.harnessId).toBe("");
 });
 
-test("switching Harness clears stale model and effort when the destination defaults are empty", () => {
+test("switching Harness selects its first catalog model and clears effort", () => {
 	resetStore();
 	const source = harness("source");
-	const noAdvisoryDefaults = harness("no-advisory-defaults", {
-		models: [],
-		efforts: [],
-		defaultModel: "",
-		defaultEffort: "",
+	const destination = harness("destination", {
+		models: [
+			{ id: "destination-first", label: "Destination first", efforts: ["low"] },
+			{
+				id: "destination-second",
+				label: "Destination second",
+				efforts: ["high"],
+			},
+		],
 	});
 	usePincerStore.getState().updateCfg({
 		harnessId: "source",
 		model: "stale-model",
 		effort: "stale-effort",
 	});
-	apply(welcome([source, noAdvisoryDefaults]));
+	apply(welcome([source, destination]));
 
-	usePincerStore.getState().choose("harness", "no-advisory-defaults");
+	usePincerStore.getState().choose("harness", "destination");
 
 	expect(usePincerStore.getState().draft).toEqual({
-		harnessId: "no-advisory-defaults",
-		model: "",
+		harnessId: "destination",
+		model: "destination-first",
 		effort: "",
 	});
 });

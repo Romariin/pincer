@@ -1,6 +1,5 @@
 import type {
 	DomContext,
-	HarnessCapabilities,
 	HarnessDisplay,
 	HarnessEvent,
 	HarnessModel,
@@ -31,11 +30,6 @@ export type HarnessDecodeResult =
 	| { kind: "ignore" }
 	| { kind: "invalid"; message: string };
 
-export interface HarnessCatalog {
-	models: HarnessModel[];
-	efforts: string[];
-}
-
 export interface HarnessModelCatalogSource {
 	build(command: string[]): HarnessInvocation;
 	decode(output: string): HarnessModel[];
@@ -56,13 +50,8 @@ export interface HarnessDefinition {
 	readonly id: string;
 	readonly display: HarnessDisplay;
 	readonly defaultCommand: readonly string[];
-	readonly capabilities: HarnessCapabilities;
-	readonly defaultModel: string;
-	readonly defaultEffort: string;
-	readonly efforts: readonly string[];
-	readonly staticModels: readonly HarnessModel[];
 	readonly probeArgs: readonly string[];
-	readonly catalog?: HarnessCatalogSource;
+	readonly catalog: HarnessCatalogSource;
 	buildTurn(request: HarnessTurnRequest, command: string[]): HarnessInvocation;
 	decodeRecord(record: unknown): HarnessDecodeResult;
 }
@@ -72,7 +61,6 @@ export interface InstalledHarness {
 	command: string[];
 	detected: boolean;
 	models: HarnessModel[];
-	efforts: string[];
 }
 
 export interface HarnessRunOutcome {

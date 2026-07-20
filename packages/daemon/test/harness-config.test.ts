@@ -11,31 +11,41 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-test("welcome exposes protocol-v3 Harness capabilities and discovered model catalog", async () => {
+test("welcome exposes protocol-v4 catalog-only Harness descriptors and only CLI-reported OMP models", async () => {
 	harness = await createHarness({ selectedHarnessId: "omp" });
 	const welcome = await harness.next("welcome");
 	const omp = welcome.harnesses.find((candidate) => candidate.id === "omp");
 
+	expect(welcome.v).toBe(V);
 	expect(welcome.defaultHarnessId).toBe("omp");
-	expect(omp).toMatchObject({
-		id: "omp",
-		detected: true,
-		capabilities: {
-			modelSelection: true,
-			effortSelection: true,
-			modelDiscovery: true,
-			sessionResume: true,
+	expect(Object.keys(omp ?? {}).sort()).toEqual([
+		"c1",
+		"c2",
+		"detected",
+		"glyph",
+		"icon",
+		"id",
+		"label",
+		"models",
+	]);
+	expect(omp).toMatchObject({ id: "omp", detected: true });
+	expect(omp?.models).toEqual([
+		{
+			id: "anthropic/claude-opus-4-8",
+			label: "Claude Opus 4.8",
+			efforts: ["low", "medium", "high", "max"],
 		},
-	});
-	expect(omp?.models).toContainEqual({
-		id: "anthropic/claude-opus-4-8",
-		label: "Claude Opus 4.8",
-		efforts: ["low", "medium", "high", "max"],
-	});
-	expect(omp?.models).toContainEqual({
-		id: "anthropic/claude-sonnet-5",
-		label: "Claude Sonnet 5",
-	});
+		{
+			id: "anthropic/claude-sonnet-5",
+			label: "Claude Sonnet 5",
+			efforts: [],
+		},
+	]);
+	expect(
+		welcome.harnesses.flatMap((candidate) =>
+			candidate.models.filter((model) => model.id === ""),
+		),
+	).toEqual([]);
 });
 
 test("welcome exposes Claude's dynamically discovered models and efforts", async () => {
@@ -48,26 +58,73 @@ test("welcome exposes Claude's dynamically discovered models and efforts", async
 		(candidate) => candidate.id === "claude-code",
 	);
 
-	expect(claude?.models).toContainEqual({
-		id: "haiku",
-		label: "Haiku",
-		efforts: ["low", "medium", "high"],
-	});
-	expect(claude?.models).toContainEqual({
-		id: "sonnet",
-		label: "Sonnet",
-		efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"],
-	});
-	expect(claude?.efforts).toEqual([
-		"low",
-		"medium",
-		"high",
-		"xhigh",
-		"max",
-		"ultracode",
+	expect(Object.keys(claude ?? {}).sort()).toEqual([
+		"c1",
+		"c2",
+		"detected",
+		"glyph",
+		"icon",
+		"id",
+		"label",
+		"models",
+	]);
+	expect(claude?.models).toEqual([
+		{
+			id: "sonnet",
+			label: "Sonnet",
+			efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+		},
+		{
+			id: "opus",
+			label: "Opus",
+			efforts: ["low", "medium", "high", "xhigh", "max", "ultracode"],
+		},
+		{
+			id: "haiku",
+			label: "Haiku",
+			efforts: ["low", "medium", "high"],
+		},
 	]);
 	expect(harness.invocations()).toEqual([]);
 });
+
+const unavailableHarnessCases: {
+	name: string;
+	harnessId: "codex" | "omp";
+	options: Parameters<typeof createHarness>[0];
+}[] = [
+	{
+		name: "its CLI probe fails",
+		harnessId: "codex",
+		options: { selectedHarnessId: "codex" },
+	},
+	{
+		name: "its CLI catalog command fails",
+		harnessId: "omp",
+		options: {
+			selectedHarnessId: "omp",
+			plan: { catalogExitCode: 9 },
+		},
+	},
+];
+
+test.each(unavailableHarnessCases)(
+	"welcome exposes no models and no default when the selected Harness $name",
+	async ({ harnessId, options }) => {
+		harness = await createHarness(options);
+		const welcome = await harness.next("welcome");
+		const unavailable = welcome.harnesses.find(
+			(candidate) => candidate.id === harnessId,
+		);
+
+		expect(welcome.defaultHarnessId).toBeNull();
+		expect(unavailable).toMatchObject({
+			id: harnessId,
+			detected: false,
+			models: [],
+		});
+	},
+);
 
 test("conversation selection preserves opaque model and effort values into the real OMP invocation", async () => {
 	harness = await createHarness();

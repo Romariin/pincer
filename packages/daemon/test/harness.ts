@@ -30,6 +30,7 @@ export interface FakeOmpExecution {
 
 export interface FakeOmpPlan {
 	catalog?: { models: unknown[] };
+	catalogExitCode?: number;
 	executions?: FakeOmpExecution[];
 }
 

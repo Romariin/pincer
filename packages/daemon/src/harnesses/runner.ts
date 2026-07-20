@@ -1,9 +1,8 @@
-import type { HarnessEvent } from "@pincer/core";
+import type { HarnessEvent, HarnessModel } from "@pincer/core";
 import { stopProcessTree } from "../processTree";
 import type { ProcessTreeHandle } from "../processTree";
 import type {
 	HarnessDecodeResult,
-	HarnessCatalog,
 	HarnessInvocation,
 	HarnessDefinition,
 	HarnessRunOutcome,
@@ -108,72 +107,48 @@ export class HarnessRunner {
 		}
 	}
 
-	static async discoverCatalog(
+	static async discoverModels(
 		definition: HarnessDefinition,
 		command: string[],
-	): Promise<HarnessCatalog> {
-		const fallback = (): HarnessCatalog => ({
-			models: [...definition.staticModels],
-			efforts: [...definition.efforts],
-		});
+	): Promise<HarnessModel[]> {
 		const source = definition.catalog;
-		if (!source) return fallback();
-
-		let models: HarnessCatalog["models"];
+		let models: HarnessModel[];
 		try {
 			const output = await runCatalogInvocation(source.models.build(command));
-			const discovered = source.models.decode(output);
-			models =
-				discovered.length > 0 ? discovered : [...definition.staticModels];
+			models = source.models.decode(output);
 		} catch {
-			return fallback();
+			return [];
 		}
 
 		const effortSource = source.efforts;
-		if (effortSource) {
-			models = await Promise.all(
-				models.map(async (model) => {
-					try {
-						const output = await runCatalogInvocation(
-							effortSource.build(command, model),
-						);
-						return { ...model, efforts: effortSource.decode(output) };
-					} catch {
-						return { ...model, efforts: [] };
-					}
-				}),
-			);
-		}
-
-		const discoveredEfforts = [
-			...new Set(models.flatMap((model) => model.efforts ?? [])),
-		];
-		return {
-			models,
-			efforts:
-				discoveredEfforts.length > 0
-					? discoveredEfforts
-					: [...definition.efforts],
-		};
+		if (!effortSource) return models;
+		return Promise.all(
+			models.map(async (model) => {
+				try {
+					const output = await runCatalogInvocation(
+						effortSource.build(command, model),
+					);
+					return { ...model, efforts: effortSource.decode(output) };
+				} catch {
+					return { ...model, efforts: [] };
+				}
+			}),
+		);
 	}
 
 	static async install(
 		definition: HarnessDefinition,
 		command: string[],
 	): Promise<InstalledHarness> {
-		const detected = await HarnessRunner.detect(definition, command);
-		const catalog = detected
-			? await HarnessRunner.discoverCatalog(definition, command)
-			: {
-					models: [...definition.staticModels],
-					efforts: [...definition.efforts],
-				};
+		const commandDetected = await HarnessRunner.detect(definition, command);
+		const models = commandDetected
+			? await HarnessRunner.discoverModels(definition, command)
+			: [];
 		return {
 			definition,
 			command,
-			detected,
-			models: catalog.models,
-			efforts: catalog.efforts,
+			detected: commandDetected && models.length > 0,
+			models,
 		};
 	}
 

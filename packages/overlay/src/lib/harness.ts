@@ -7,16 +7,7 @@ export const FALLBACK_HARNESS: HarnessDescriptor = {
 	c1: "#4a4a50",
 	c2: "#333338",
 	detected: false,
-	capabilities: {
-		modelSelection: false,
-		effortSelection: false,
-		modelDiscovery: false,
-		sessionResume: false,
-	},
 	models: [],
-	defaultModel: "",
-	efforts: [],
-	defaultEffort: "",
 };
 
 const EFFORT_LABEL: Record<string, string> = {
@@ -42,9 +33,7 @@ export function harnessInfo(
 }
 
 export function modelLabel(info: HarnessDescriptor, id: string): string {
-	return (
-		info.models.find((model) => model.id === id)?.label ?? (id || "Default")
-	);
+	return info.models.find((model) => model.id === id)?.label ?? id;
 }
 
 export function modelEfforts(
@@ -53,7 +42,7 @@ export function modelEfforts(
 	current: string,
 ): string[] {
 	const model = info.models.find((candidate) => candidate.id === modelId);
-	const catalog = model?.efforts ?? info.efforts;
+	const catalog = model?.efforts ?? [];
 	if (!current || catalog.includes(current)) return catalog;
 	return [current, ...catalog];
 }

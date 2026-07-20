@@ -24,17 +24,34 @@ const definition: HarnessDefinition = {
 	id: "contract-harness",
 	display: { label: "Contract", glyph: "C", c1: "#000", c2: "#fff" },
 	defaultCommand: [],
-	capabilities: {
-		modelSelection: true,
-		effortSelection: true,
-		modelDiscovery: false,
-		sessionResume: true,
-	},
-	defaultModel: "",
-	defaultEffort: "",
-	efforts: [],
-	staticModels: [],
 	probeArgs: ["--version"],
+	catalog: {
+		models: {
+			build(command) {
+				return { argv: [...command, "catalog"] };
+			},
+			decode(output) {
+				const parsed = JSON.parse(output) as {
+					models?: { id?: unknown; label?: unknown; efforts?: unknown }[];
+				};
+				if (!Array.isArray(parsed.models)) return [];
+				return parsed.models.flatMap((model) =>
+					typeof model.id === "string" &&
+					typeof model.label === "string" &&
+					Array.isArray(model.efforts) &&
+					model.efforts.every((effort) => typeof effort === "string")
+						? [
+								{
+									id: model.id,
+									label: model.label,
+									efforts: model.efforts as string[],
+								},
+							]
+						: [],
+				);
+			},
+		},
+	},
 	buildTurn(request, command) {
 		return {
 			argv: [
@@ -114,7 +131,6 @@ async function runPlan(
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
 		detected: true,
 		models: [],
-		efforts: [],
 	};
 	const running = new HarnessRunner().start(
 		installed,
@@ -123,6 +139,59 @@ async function runPlan(
 	);
 	return { outcome: await running.outcome, root, recordPath };
 }
+
+const installationCases: [
+	name: string,
+	catalogOutput: string | null,
+	expectedDetected: boolean,
+	expectedModels: { id: string; label: string; efforts: string[] }[],
+][] = [
+	["an unavailable CLI", null, false, []],
+	["a malformed catalog response", "not-json", false, []],
+	["an empty catalog", JSON.stringify({ models: [] }), false, []],
+	[
+		"a non-empty CLI catalog",
+		JSON.stringify({
+			models: [
+				{
+					id: "cli/model-2026",
+					label: "CLI Model 2026",
+					efforts: ["brief", "deep"],
+				},
+			],
+		}),
+		true,
+		[
+			{
+				id: "cli/model-2026",
+				label: "CLI Model 2026",
+				efforts: ["brief", "deep"],
+			},
+		],
+	],
+];
+
+test.each(installationCases)(
+	"installer exposes models only for %s with at least one decoded catalog model",
+	async (_name, catalogOutput, expectedDetected, expectedModels) => {
+		let command: string[];
+		if (catalogOutput === null) {
+			command = [`pincer-test-missing-runner-${crypto.randomUUID()}`];
+		} else {
+			const root = mkdtempSync(join(tmpdir(), "pincer-runner-install-"));
+			roots.push(root);
+			const planPath = join(root, "plan.json");
+			const recordPath = join(root, "record.json");
+			writeFileSync(planPath, JSON.stringify({ rawLines: [catalogOutput] }));
+			command = ["bun", FAKE_RUNNER, planPath, recordPath];
+		}
+
+		const installed = await HarnessRunner.install(definition, command);
+
+		expect(installed.detected).toBe(expectedDetected);
+		expect(installed.models).toEqual(expectedModels);
+	},
+);
 
 test("runner preserves invocation bytes, expands multi-event records, and diagnoses only invalid records", async () => {
 	const observed: HarnessEvent[] = [];
@@ -273,7 +342,6 @@ test("runner cancellation terminates the Harness process group, including descen
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
 		detected: true,
 		models: [],
-		efforts: [],
 	};
 	let signalReady = (): void => {};
 	const ready = new Promise<void>((resolve) => {

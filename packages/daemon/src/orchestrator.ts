@@ -99,6 +99,10 @@ export class Orchestrator {
 		if (!harness) return this.unknownHarness(selectedId);
 		if (!harness.detected) return this.unavailableHarness(selectedId);
 
+		const model = config.model || harness.models[0]?.id;
+		if (!model) return this.unavailableHarness(selectedId);
+		const effort = config.effort ?? "";
+
 		const id = crypto.randomUUID().slice(0, 8);
 		const branch = await this.git.currentBranch();
 		const now = Date.now();
@@ -109,8 +113,8 @@ export class Orchestrator {
 			base_commit: "",
 			status: "active",
 			harness_id: selectedId,
-			model: config.model ?? harness.definition.defaultModel,
-			effort: config.effort ?? harness.definition.defaultEffort,
+			model,
+			effort,
 			created_at: now,
 			updated_at: now,
 		});
@@ -309,14 +313,12 @@ export class Orchestrator {
 		const turns = this.store.getTurns(submission.conversationId);
 		const seq = turns.length + 1;
 		let resumeToken: string | null = null;
-		if (harness.definition.capabilities.sessionResume) {
-			for (let index = turns.length - 1; index >= 0; index -= 1) {
-				const turn = turns[index];
-				if (!turn || turn.harness_id !== submission.selection.harnessId) break;
-				if (turn.status !== "complete") continue;
-				resumeToken = turn.resume_token;
-				break;
-			}
+		for (let index = turns.length - 1; index >= 0; index -= 1) {
+			const turn = turns[index];
+			if (!turn || turn.harness_id !== submission.selection.harnessId) break;
+			if (turn.status !== "complete") continue;
+			resumeToken = turn.resume_token;
+			break;
 		}
 
 		const turnId = this.store.addTurn({

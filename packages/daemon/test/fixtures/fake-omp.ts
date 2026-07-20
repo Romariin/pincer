@@ -54,6 +54,10 @@ if (kind === "claude" && argv.includes("/effort")) {
 }
 
 if (argv.includes("models") && argv.includes("--json")) {
+	if (plan.catalogExitCode !== undefined) {
+		process.stderr.write("fake catalog failure\n");
+		process.exit(plan.catalogExitCode);
+	}
 	process.stdout.write(
 		JSON.stringify(
 			plan.catalog ?? {

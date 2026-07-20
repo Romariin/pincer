@@ -5,8 +5,8 @@ import type { DomContext } from "./dom";
 export interface HarnessModel {
 	id: string;
 	label: string;
-	/** Raw effort values accepted by this model, when narrower than the Harness catalog. */
-	efforts?: string[];
+	/** Raw effort values accepted by this model, in CLI display order. */
+	efforts: string[];
 }
 
 /** Serializable presentation metadata for a coding CLI Harness. */
@@ -21,23 +21,11 @@ export interface HarnessDisplay {
 	c2: string;
 }
 
-/** Optional controls and lifecycle behavior explicitly supported by a Harness. */
-export interface HarnessCapabilities {
-	modelSelection: boolean;
-	effortSelection: boolean;
-	modelDiscovery: boolean;
-	sessionResume: boolean;
-}
-
 /** Browser-safe startup projection of a daemon-private HarnessDefinition. */
 export interface HarnessDescriptor extends HarnessDisplay {
 	id: string;
 	detected: boolean;
-	capabilities: HarnessCapabilities;
 	models: HarnessModel[];
-	defaultModel: string;
-	efforts: string[];
-	defaultEffort: string;
 }
 
 /** Immutable Harness controls captured when a turn is submitted. */
@@ -46,11 +34,6 @@ export interface HarnessSelection {
 	model: string;
 	effort: string;
 }
-
-/** Built-in effort vocabulary used by Harnesses that expose reasoning effort. */
-export const EFFORTS = ["Minimal", "Low", "Medium", "High", "Max"] as const;
-export type Effort = (typeof EFFORTS)[number];
-export const DEFAULT_EFFORT: Effort = "High";
 
 /** One line of a unified diff hunk streamed to the client. */
 export interface DiffHunk {
@@ -247,7 +230,7 @@ export type ServerMessage =
 			daemonVersion: string;
 			protocolVersion: number;
 			projectRoot: string;
-			/** Every built-in Harness with live install detection and advisory controls. */
+			/** Every built-in Harness with live install detection and its CLI-owned model catalog. */
 			harnesses: HarnessDescriptor[];
 			/** Harness selected by default for new conversations, or null when none is available. */
 			defaultHarnessId: string | null;

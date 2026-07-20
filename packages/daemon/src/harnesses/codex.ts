@@ -1,4 +1,4 @@
-import type { HarnessEvent } from "@pincer/core";
+import type { HarnessEvent, HarnessModel } from "@pincer/core";
 import { composePrompt } from "./prompt";
 import type { HarnessDecodeResult, HarnessDefinition } from "./types";
 
@@ -22,6 +22,51 @@ function summary(value: unknown): string {
 	return message ? (string(message.message) ?? "") : "";
 }
 
+function decodeEfforts(model: Record<string, unknown>): string[] {
+	const raw =
+		model.supportedReasoningEfforts ?? model.supported_reasoning_efforts;
+	if (!Array.isArray(raw)) return [];
+	const efforts = new Set<string>();
+	for (const value of raw) {
+		const option = record(value);
+		const effort =
+			string(value) ??
+			string(option?.reasoningEffort) ??
+			string(option?.reasoning_effort) ??
+			string(option?.value);
+		if (effort) efforts.add(effort);
+	}
+	return [...efforts];
+}
+
+function decodeModels(output: string): HarnessModel[] {
+	const parsed: unknown = JSON.parse(output);
+	const root = record(parsed);
+	const raw = Array.isArray(parsed)
+		? parsed
+		: Array.isArray(root?.models)
+			? root.models
+			: Array.isArray(root?.data)
+				? root.data
+				: [];
+	const models = new Map<string, HarnessModel>();
+	for (const value of raw) {
+		const model = record(value);
+		if (!model || model.hidden === true) continue;
+		const visibility = string(model.visibility);
+		if (visibility === "hide" || visibility === "hidden") continue;
+		const id = string(model.model) ?? string(model.id) ?? string(model.slug);
+		if (!id || models.has(id)) continue;
+		const label =
+			string(model.displayName) ??
+			string(model.display_name) ??
+			string(model.name) ??
+			id;
+		models.set(id, { id, label, efforts: decodeEfforts(model) });
+	}
+	return [...models.values()];
+}
+
 export const codexHarness: HarnessDefinition = {
 	id: "codex",
 	display: {
@@ -31,21 +76,15 @@ export const codexHarness: HarnessDefinition = {
 		c2: "#199e68",
 	},
 	defaultCommand: ["codex"],
-	capabilities: {
-		modelSelection: true,
-		effortSelection: true,
-		modelDiscovery: false,
-		sessionResume: true,
-	},
-	defaultModel: "gpt-5.1-codex",
-	defaultEffort: "high",
-	efforts: ["minimal", "low", "medium", "high", "xhigh"],
-	staticModels: [
-		{ id: "gpt-5.1-codex", label: "GPT-5 Codex" },
-		{ id: "gpt-5", label: "GPT-5" },
-		{ id: "o4-mini", label: "o4-mini" },
-	],
 	probeArgs: ["--version"],
+	catalog: {
+		models: {
+			build(command) {
+				return { argv: [...command, "debug", "models"] };
+			},
+			decode: decodeModels,
+		},
+	},
 
 	buildTurn(request, command) {
 		const controls = [

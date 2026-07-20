@@ -167,12 +167,8 @@ export function Message({
 							align="start"
 						>
 							{info.label}
-							{info.capabilities.modelSelection
-								? ` · model ${modelLabel(info, meta.model)}`
-								: ""}
-							{info.capabilities.effortSelection
-								? ` · effort ${effortLabel(meta.effort)}`
-								: ""}
+							{meta.model ? ` · model ${modelLabel(info, meta.model)}` : ""}
+							{meta.effort ? ` · effort ${effortLabel(meta.effort)}` : ""}
 						</TooltipContent>
 					</Tooltip>
 				) : (

@@ -23,21 +23,6 @@ export const ompHarness: HarnessDefinition = {
 		icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ed4abf"/><stop offset=".5" stop-color="#9b4dff"/><stop offset="1" stop-color="#5ad8e6"/></linearGradient></defs><path fill="url(#g)" d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z"/></svg>',
 	},
 	defaultCommand: ["omp"],
-	capabilities: {
-		modelSelection: true,
-		effortSelection: true,
-		modelDiscovery: true,
-		sessionResume: true,
-	},
-	defaultModel: "",
-	defaultEffort: "high",
-	efforts: ["minimal", "low", "medium", "high", "max"],
-	staticModels: [
-		{ id: "", label: "Default" },
-		{ id: "opus", label: "Opus" },
-		{ id: "sonnet", label: "Sonnet" },
-		{ id: "gpt-5", label: "GPT-5" },
-	],
 	probeArgs: ["--version"],
 	catalog: {
 		models: {
@@ -64,19 +49,16 @@ export const ompHarness: HarnessDefinition = {
 								: typeof model.id === "string"
 									? model.id
 									: id;
-						const result: HarnessModel = { id, label };
-						if (Array.isArray(model.thinking)) {
-							const efforts = model.thinking.filter(
-								(effort): effort is string => typeof effort === "string",
-							);
-							if (efforts.length > 0) result.efforts = efforts;
-						}
+						const efforts = Array.isArray(model.thinking)
+							? model.thinking.filter(
+									(effort): effort is string => typeof effort === "string",
+								)
+							: [];
+						const result: HarnessModel = { id, label, efforts };
 						return result;
 					})
 					.filter((model): model is HarnessModel => model !== null);
-				return models.length > 0
-					? [{ id: "", label: "Default" }, ...models]
-					: [];
+				return models;
 			},
 		},
 	},
