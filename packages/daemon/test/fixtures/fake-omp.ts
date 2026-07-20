@@ -26,6 +26,27 @@ if (argv.includes("--version")) {
 	process.exit(0);
 }
 
+if (kind === "claude" && argv.includes("/model")) {
+	process.stdout.write(
+		JSON.stringify({
+			type: "result",
+			result:
+				"Current model: Sonnet\nUsage: /model <name>. Available: sonnet, opus, haiku, default, or a full model ID.",
+		}),
+	);
+	process.exit(0);
+}
+
+if (kind === "claude" && argv.includes("/effort")) {
+	process.stdout.write(
+		JSON.stringify({
+			type: "result",
+			result: "Usage: /effort <low|medium|high|xhigh|max>",
+		}),
+	);
+	process.exit(0);
+}
+
 if (argv.includes("models") && argv.includes("--json")) {
 	process.stdout.write(
 		JSON.stringify(

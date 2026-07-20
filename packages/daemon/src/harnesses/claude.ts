@@ -1,4 +1,4 @@
-import type { HarnessEvent } from "@pincer/core";
+import type { HarnessEvent, HarnessModel } from "@pincer/core";
 import { composePrompt } from "./prompt";
 import type { HarnessDecodeResult, HarnessDefinition } from "./types";
 
@@ -15,6 +15,71 @@ function events(events: HarnessEvent[]): HarnessDecodeResult {
 	return { kind: "events", events };
 }
 
+function printResult(stdout: string): string {
+	const message = record(JSON.parse(stdout));
+	return message && typeof message.result === "string" ? message.result : "";
+}
+
+function modelLabel(id: string): string {
+	const match = /^(.+?)(?:\[([^\]]+)\])?$/.exec(id);
+	const name = (match?.[1] ?? id)
+		.replace(/[-_]+/g, " ")
+		.replace(/\b\w/g, (character) => character.toUpperCase());
+	return match?.[2] ? `${name} (${match[2].toUpperCase()})` : name;
+}
+
+function decodeModels(stdout: string): HarnessModel[] {
+	const available =
+		/Available:\s*([\s\S]*?)(?:,?\s+or\s+a full model ID\.?|$)/i.exec(
+			printResult(stdout),
+		)?.[1];
+	if (!available) return [];
+	const models = new Map<string, HarnessModel>();
+	for (const alias of available.split(",").map((value) => value.trim())) {
+		if (!alias) continue;
+		const id = alias === "default" ? "" : alias;
+		if (!models.has(id)) {
+			models.set(id, { id, label: id ? modelLabel(id) : "Default" });
+		}
+	}
+	const defaultModel = models.get("");
+	if (defaultModel) models.delete("");
+	return defaultModel
+		? [defaultModel, ...models.values()]
+		: [...models.values()];
+}
+
+function decodeEfforts(stdout: string): string[] {
+	const choices = /\/effort\s+<([^>]+)>/i.exec(printResult(stdout))?.[1];
+	if (!choices) return [];
+	return [
+		...new Set(
+			choices
+				.split("|")
+				.map((value) => value.trim())
+				.filter(Boolean),
+		),
+	];
+}
+
+function catalogInvocation(
+	command: string[],
+	slashCommand: "/model" | "/effort",
+) {
+	return {
+		argv: [
+			...command,
+			"-p",
+			slashCommand,
+			"--output-format",
+			"json",
+			"--no-session-persistence",
+			"--max-budget-usd",
+			"0.000001",
+		],
+	};
+}
+
 export const claudeHarness: HarnessDefinition = {
 	id: "claude-code",
 	display: {
@@ -27,21 +92,29 @@ export const claudeHarness: HarnessDefinition = {
 	defaultCommand: ["claude"],
 	capabilities: {
 		modelSelection: true,
-		effortSelection: false,
-		modelDiscovery: false,
+		effortSelection: true,
+		modelDiscovery: true,
 		sessionResume: true,
 	},
 	defaultModel: "",
 	defaultEffort: "",
 	efforts: [],
-	staticModels: [
-		{ id: "", label: "Default" },
-		{ id: "sonnet", label: "Sonnet" },
-		{ id: "opus", label: "Opus" },
-		{ id: "haiku", label: "Haiku" },
-	],
+	staticModels: [],
 	probeArgs: ["--version"],
-
+	catalog: {
+		build(command) {
+			return [
+				catalogInvocation(command, "/model"),
+				catalogInvocation(command, "/effort"),
+			];
+		},
+		decode(outputs) {
+			return {
+				models: decodeModels(outputs[0] ?? ""),
+				efforts: decodeEfforts(outputs[1] ?? ""),
+			};
+		},
+	},
 	buildTurn(request, command) {
 		return {
 			argv: [
@@ -56,6 +129,9 @@ export const claudeHarness: HarnessDefinition = {
 				"acceptEdits",
 				...(request.selection.model
 					? ["--model", request.selection.model]
+					: []),
+				...(request.selection.effort
+					? ["--effort", request.selection.effort]
 					: []),
 				...(request.resumeToken ? ["--resume", request.resumeToken] : []),
 			],

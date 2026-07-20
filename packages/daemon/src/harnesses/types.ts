@@ -31,9 +31,14 @@ export type HarnessDecodeResult =
 	| { kind: "ignore" }
 	| { kind: "invalid"; message: string };
 
-export interface HarnessModelCatalog {
-	build(command: string[]): HarnessInvocation;
-	decode(stdout: string): HarnessModel[];
+export interface HarnessCatalog {
+	models: HarnessModel[];
+	efforts: string[];
+}
+
+export interface HarnessCatalogSource {
+	build(command: string[]): readonly HarnessInvocation[];
+	decode(outputs: readonly string[]): HarnessCatalog;
 }
 
 /** Daemon-private built-in extension contract. Harnesses describe vendor behavior only. */
@@ -47,7 +52,7 @@ export interface HarnessDefinition {
 	readonly efforts: readonly string[];
 	readonly staticModels: readonly HarnessModel[];
 	readonly probeArgs: readonly string[];
-	readonly catalog?: HarnessModelCatalog;
+	readonly catalog?: HarnessCatalogSource;
 	buildTurn(request: HarnessTurnRequest, command: string[]): HarnessInvocation;
 	decodeRecord(record: unknown): HarnessDecodeResult;
 }
@@ -57,6 +62,7 @@ export interface InstalledHarness {
 	command: string[];
 	detected: boolean;
 	models: HarnessModel[];
+	efforts: string[];
 }
 
 export interface HarnessRunOutcome {

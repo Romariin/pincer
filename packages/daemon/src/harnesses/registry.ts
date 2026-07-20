@@ -100,7 +100,7 @@ export function harnessDescriptors(
 			...(model.efforts ? { efforts: [...model.efforts] } : {}),
 		})),
 		defaultModel: harness.definition.defaultModel,
-		efforts: [...harness.definition.efforts],
+		efforts: [...harness.efforts],
 		defaultEffort: harness.definition.defaultEffort,
 	}));
 }

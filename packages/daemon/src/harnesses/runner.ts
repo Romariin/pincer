@@ -1,8 +1,9 @@
-import type { HarnessEvent, HarnessModel } from "@pincer/core";
+import type { HarnessEvent } from "@pincer/core";
 import { stopProcessTree } from "../processTree";
 import type { ProcessTreeHandle } from "../processTree";
 import type {
 	HarnessDecodeResult,
+	HarnessCatalog,
 	HarnessDefinition,
 	HarnessRunOutcome,
 	HarnessTurnRequest,
@@ -85,31 +86,49 @@ export class HarnessRunner {
 		}
 	}
 
-	static async discoverModels(
+	static async discoverCatalog(
 		definition: HarnessDefinition,
 		command: string[],
-	): Promise<readonly HarnessModel[]> {
-		if (!definition.catalog) return definition.staticModels;
+	): Promise<HarnessCatalog> {
+		const fallback = (): HarnessCatalog => ({
+			models: [...definition.staticModels],
+			efforts: [...definition.efforts],
+		});
+		if (!definition.catalog) return fallback();
 		try {
-			const invocation = definition.catalog.build(command);
-			const proc = Bun.spawn({
-				cmd: invocation.argv,
-				env: process.env,
-				stdin: invocation.stdin === undefined ? "ignore" : "pipe",
-				stdout: "pipe",
-				stderr: "ignore",
-				signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
-			});
-			if (invocation.stdin !== undefined && proc.stdin) {
-				proc.stdin.write(invocation.stdin);
-				proc.stdin.end();
-			}
-			const stdout = await readText(proc.stdout, 1_048_576);
-			if ((await proc.exited) !== 0) return definition.staticModels;
-			const models = definition.catalog.decode(stdout);
-			return models.length > 0 ? models : definition.staticModels;
+			const outputs = await Promise.all(
+				definition.catalog.build(command).map(async (invocation) => {
+					const proc = Bun.spawn({
+						cmd: invocation.argv,
+						env: process.env,
+						stdin: invocation.stdin === undefined ? "ignore" : "pipe",
+						stdout: "pipe",
+						stderr: "ignore",
+						signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
+					});
+					if (invocation.stdin !== undefined && proc.stdin) {
+						proc.stdin.write(invocation.stdin);
+						proc.stdin.end();
+					}
+					const stdout = await readText(proc.stdout, 1_048_576);
+					if ((await proc.exited) !== 0)
+						throw new Error("Harness catalog command failed");
+					return stdout;
+				}),
+			);
+			const catalog = definition.catalog.decode(outputs);
+			return {
+				models:
+					catalog.models.length > 0
+						? catalog.models
+						: [...definition.staticModels],
+				efforts:
+					catalog.efforts.length > 0
+						? catalog.efforts
+						: [...definition.efforts],
+			};
 		} catch {
-			return definition.staticModels;
+			return fallback();
 		}
 	}
 
@@ -118,10 +137,19 @@ export class HarnessRunner {
 		command: string[],
 	): Promise<InstalledHarness> {
 		const detected = await HarnessRunner.detect(definition, command);
-		const models = detected
-			? await HarnessRunner.discoverModels(definition, command)
-			: definition.staticModels;
-		return { definition, command, detected, models: [...models] };
+		const catalog = detected
+			? await HarnessRunner.discoverCatalog(definition, command)
+			: {
+					models: [...definition.staticModels],
+					efforts: [...definition.efforts],
+				};
+		return {
+			definition,
+			command,
+			detected,
+			models: catalog.models,
+			efforts: catalog.efforts,
+		};
 	}
 
 	start(

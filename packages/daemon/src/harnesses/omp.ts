@@ -41,11 +41,12 @@ export const ompHarness: HarnessDefinition = {
 	probeArgs: ["--version"],
 	catalog: {
 		build(command) {
-			return { argv: [...command, "models", "--json"] };
+			return [{ argv: [...command, "models", "--json"] }];
 		},
-		decode(stdout) {
-			const parsed = record(JSON.parse(stdout));
-			if (!parsed || !Array.isArray(parsed.models)) return [];
+		decode(outputs) {
+			const parsed = record(JSON.parse(outputs[0] ?? ""));
+			if (!parsed || !Array.isArray(parsed.models))
+				return { models: [], efforts: [] };
 			const models: HarnessModel[] = parsed.models
 				.map((value): HarnessModel | null => {
 					const model = record(value);
@@ -73,7 +74,14 @@ export const ompHarness: HarnessDefinition = {
 					return result;
 				})
 				.filter((model): model is HarnessModel => model !== null);
-			return models.length > 0 ? [{ id: "", label: "Default" }, ...models] : [];
+			const efforts = [
+				...new Set(models.flatMap((model) => model.efforts ?? [])),
+			];
+			return {
+				models:
+					models.length > 0 ? [{ id: "", label: "Default" }, ...models] : [],
+				efforts,
+			};
 		},
 	},
 

@@ -114,6 +114,7 @@ async function runPlan(
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
 		detected: true,
 		models: [],
+		efforts: [],
 	};
 	const running = new HarnessRunner().start(
 		installed,
@@ -272,6 +273,7 @@ test("runner cancellation terminates the Harness process group, including descen
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
 		detected: true,
 		models: [],
+		efforts: [],
 	};
 	let signalReady = (): void => {};
 	const ready = new Promise<void>((resolve) => {
