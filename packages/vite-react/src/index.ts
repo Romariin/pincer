@@ -18,7 +18,7 @@ export { pincerBabel } from "./babelPlugin";
  * JSX element before a shared-pass `JSXOpeningElement` visitor could tag it).
  * JSX/TS is preserved for the downstream React transform.
  */
-export default function pincer(options?: { daemonUrl?: string; toggleKey?: string }): Plugin {
+export default function pincer(options?: { daemonUrl?: string }): Plugin {
   let projectRoot = process.cwd();
 
   return {
@@ -108,7 +108,6 @@ export default function pincer(options?: { daemonUrl?: string; toggleKey?: strin
               wsUrl: options?.daemonUrl ?? `ws://127.0.0.1:${DEFAULT_PORT}`,
               contractAVersion: CONTRACT_A_VERSION,
               projectRoot,
-              toggleKey: options?.toggleKey ?? "Alt+Shift+P",
             }),
           injectTo: "head" as const,
         },

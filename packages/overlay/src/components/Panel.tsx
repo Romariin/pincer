@@ -1,11 +1,12 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { usePincerStore } from "@/state/store";
-import { matchesToggle, parseToggleKey } from "@/lib/config";
+import { matchesShortcut } from "@/lib/shortcut";
 import { GAP, PANEL_W } from "@/lib/constants";
 import { Header } from "./Header";
 import { CommandBar } from "./CommandBar";
 import { ListView } from "./ListView";
 import { ChatView } from "./ChatView";
+import { SettingsView } from "./SettingsView";
 import { Tray } from "./Tray";
 import { Composer } from "./Composer";
 import { Picker } from "./Picker";
@@ -34,19 +35,18 @@ export function Panel(): ReactNode {
 
   // Global toggle key + Escape handling (capture phase, so it wins over the host page).
   useEffect(() => {
-    const toggle = parseToggleKey(window.__PINCER__?.toggleKey);
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (matchesToggle(toggle, e)) {
+      const s = usePincerStore.getState();
+      if (s.recordingShortcut) return;
+      if (matchesShortcut(s.shortcut, e)) {
         e.preventDefault();
-        const s = usePincerStore.getState();
         s.setPanelOpen(!s.panelOpen);
         return;
       }
       if (e.key === "Escape") {
-        const s = usePincerStore.getState();
         if (s.picker) s.closePicker();
         else if (s.selecting) s.setSelecting(false);
-        else if (s.view === "chat" && s.panelOpen) s.setView("list");
+        else if ((s.view === "settings" || s.view === "chat") && s.panelOpen) s.setView("list");
         else if (s.panelOpen) s.setPanelOpen(false);
       }
     };
@@ -76,12 +76,18 @@ export function Panel(): ReactNode {
     >
       <OverlayContainerProvider value={pickerContainer}>
         <Header />
-        <CommandBar />
-        <div className="flex min-h-0 flex-1 flex-col">
-          {view === "list" ? <ListView /> : <ChatView />}
-        </div>
-        <Tray />
-        <Composer />
+        {view === "settings" ? (
+          <SettingsView />
+        ) : (
+          <>
+            <CommandBar />
+            <div className="flex min-h-0 flex-1 flex-col">
+              {view === "list" ? <ListView /> : <ChatView />}
+            </div>
+            <Tray />
+            <Composer />
+          </>
+        )}
         <div ref={pickerContainer} className="pointer-events-none absolute inset-0 contain-layout" />
         <Picker container={pickerContainer} />
       </OverlayContainerProvider>

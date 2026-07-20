@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import type { ConversationSummary } from "@pincer/core";
 
 export interface ConversationRow {
@@ -73,14 +73,13 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `;
 
-/** Persistent conversation/turn history in `<projectRoot>/.pincer/history.db`. */
+/** Persistent conversation/turn history at an explicit user-data database path. */
 export class Store {
   private readonly db: Database;
 
-  constructor(projectRoot: string) {
-    const dir = join(projectRoot, ".pincer");
-    mkdirSync(dir, { recursive: true });
-    this.db = new Database(join(dir, "history.db"));
+  constructor(historyDbPath: string) {
+    mkdirSync(dirname(historyDbPath), { recursive: true });
+    this.db = new Database(historyDbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec(SCHEMA);
     for (const col of ["harness_id", "model", "effort"]) {
@@ -96,6 +95,7 @@ export class Store {
       /* column already present */
     }
     this.db.query("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run();
+    this.db.query("UPDATE turns SET status = 'error' WHERE status = 'running'").run();
   }
 
   close(): void {

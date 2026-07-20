@@ -9,8 +9,8 @@ const HELP = `pincer — click an element in your running app, describe a change
 
 Usage:
   pincer [options]                     Start the daemon (pair with a framework plugin, e.g. @pincer/vite-react).
-  pincer dev [options] -- <command>    Start the daemon AND run your dev server behind an injection
-                                       proxy — no per-app install needed. Open the proxy URL.
+  pincer [options] -- <command>        Run the app behind Pincer's zero-install injection proxy.
+  pincer dev [options] -- <command>    Alias for the proxy form above.
 
 Options:
   --project <dir>           Project root (must be a git repo). Default: current directory.
@@ -19,13 +19,12 @@ Options:
   --agent-command "<cmd>"   Override the agent CLI command, shell-split (e.g. "bunx claude").
   -h, --help                Show this help.
 
-Options (pincer dev only):
+Proxy options:
   --proxy-port <n>          Injection proxy port. Default: ${DEFAULT_PROXY_PORT}.
   --target <url>            Upstream dev server URL. Default: auto-detected from the command's output.
-  --toggle-key "<combo>"    Overlay toggle shortcut. Default: Alt+Shift+P.
 
 Config file (optional): pincer.config.json in the project root:
-  { "port": 7391, "proxyPort": 7392, "toggleKey": "Alt+Shift+P", "agent": { "id": "claude-code", "command": ["claude"] } }
+  { "port": 7391, "proxyPort": 7392, "agent": { "id": "claude-code", "command": ["claude"] } }
 Precedence: CLI flags > config file > auto-detect.
 `;
 
@@ -34,25 +33,25 @@ interface CliArgs {
   port?: number;
   proxyPort?: number;
   target?: string;
-  toggleKey?: string;
   agentId?: string;
   agentCommand?: string[];
   command: string[];
+  proxyRequested: boolean;
   help: boolean;
 }
 
 interface FileConfig {
   port?: number;
   proxyPort?: number;
-  toggleKey?: string;
   agent?: { id?: string; command?: string[] };
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { project: process.cwd(), command: [], help: false };
+  const args: CliArgs = { project: process.cwd(), command: [], proxyRequested: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--") {
+      args.proxyRequested = true;
       args.command = argv.slice(i + 1);
       break;
     }
@@ -77,9 +76,6 @@ function parseArgs(argv: string[]): CliArgs {
       case "--target":
         args.target = argv[++i];
         break;
-      case "--toggle-key":
-        args.toggleKey = argv[++i];
-        break;
       case "--agent":
         args.agentId = argv[++i];
         break;
@@ -87,6 +83,12 @@ function parseArgs(argv: string[]): CliArgs {
         args.agentCommand = (argv[++i] ?? "").split(/\s+/).filter((w) => w.length > 0);
         break;
       default:
+        if (typeof flag === "string" && !flag.startsWith("-")) {
+          // Bun consumes the shell's `--` before a shebang script sees argv.
+          args.proxyRequested = true;
+          args.command = argv.slice(i);
+          return args;
+        }
         break;
     }
   }
@@ -122,10 +124,11 @@ const fileConfig = readFileConfig(projectRoot, log);
 const port = args.port ?? fileConfig.port ?? DEFAULT_PORT;
 const agentId = args.agentId ?? fileConfig.agent?.id;
 const agentCommand = args.agentCommand ?? fileConfig.agent?.command;
+const proxyMode = isDev || args.proxyRequested || args.target !== undefined;
 
-if (isDev) {
+if (proxyMode) {
   if (args.command.length === 0 && !args.target) {
-    console.error('usage: pincer dev [options] -- <command>   (e.g. pincer dev -- bun run dev)');
+    console.error("usage: pincer [options] -- <command>   (e.g. pincer -- bun run dev)");
     process.exit(1);
   }
   await runDev({
@@ -134,7 +137,6 @@ if (isDev) {
     proxyPort: args.proxyPort ?? fileConfig.proxyPort ?? DEFAULT_PROXY_PORT,
     command: args.command,
     target: args.target,
-    toggleKey: args.toggleKey ?? fileConfig.toggleKey,
     agentId,
     agentCommand,
     log,
@@ -146,12 +148,10 @@ if (isDev) {
     `pincer listening on ws://127.0.0.1:${daemon.port}, project ${projectRoot}, agent ${daemon.orchestrator.agentId ?? "none"}`,
   );
 
-  process.on("SIGINT", () => {
-    daemon.stop();
+  const shutdown = async (): Promise<never> => {
+    await daemon.stop();
     process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    daemon.stop();
-    process.exit(0);
-  });
+  };
+  process.once("SIGINT", () => void shutdown());
+  process.once("SIGTERM", () => void shutdown());
 }

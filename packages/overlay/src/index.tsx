@@ -2,10 +2,8 @@ import { createRoot } from "react-dom/client";
 import overlayCss from "./overlay.css?inline";
 import { RootProvider } from "./context/root";
 import { App } from "./App";
-import type { PincerConfig } from "./lib/config";
 
 function mount(): void {
-  const config: PincerConfig = window.__PINCER__ ?? {};
 
   const host = document.createElement("div");
   host.id = "__pincer_root__";
@@ -37,7 +35,7 @@ function mount(): void {
     </RootProvider>,
   );
 
-  console.info(`[pincer] overlay ready — press ${config.toggleKey ?? "Alt+Shift+P"} to open`);
+  console.info("[pincer] overlay ready");
 }
 
 if (!window.__PINCER_LOADED__) {

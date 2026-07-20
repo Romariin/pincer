@@ -80,24 +80,23 @@ export const ompAdapter: AgentAdapter = {
   },
 
   invocation(task, command) {
-    const sessionDir = join(task.projectRoot, ".pincer/omp-sessions");
-    // Effort is either a shared capitalized label (map via THINKING) or a raw
-    // per-model omp level (pass through unchanged).
-    const thinking = task.effort ? (THINKING[task.effort] ?? task.effort) : undefined;
-    const argv = [
+    const args = [
       ...command,
       "-p",
       "--mode",
       "json",
       "--auto-approve",
       "--session-dir",
-      sessionDir,
-      ...(task.model ? ["--model", task.model] : []),
-      ...(thinking ? ["--thinking", thinking] : []),
-      ...(task.resumeSessionId ? ["-r", task.resumeSessionId] : []),
-      composePrompt(task), // trailing positional MESSAGES arg
+      join(task.pincerDataDir, "omp-sessions"),
     ];
-    return { argv };
+    if (task.resumeSessionId) args.push("-r", task.resumeSessionId);
+    if (task.model) args.push("--model", task.model);
+    if (task.effort) {
+      // Named Pincer levels map to OMP defaults; model-specific raw levels pass through.
+      args.push("--thinking", THINKING[task.effort] ?? task.effort);
+    }
+    args.push(composePrompt(task));
+    return { argv: args };
   },
 
   parseLine(line: string): AgentEvent | null {

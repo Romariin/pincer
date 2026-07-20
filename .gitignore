@@ -141,6 +141,3 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
-
-# Pincer daemon runtime data (history DB, checkpoints metadata)
-.pincer/

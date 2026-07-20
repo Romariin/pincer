@@ -57,6 +57,8 @@ test("injects config + overlay loader into HTML responses", async () => {
   expect(html).toContain("<h1>app</h1>");
   expect(html).toContain("window.__PINCER__=");
   expect(html).toContain('"wsUrl":"ws://127.0.0.1:7391"');
+  expect(html).toContain('"projectRoot":"/tmp/example"');
+  expect(html).not.toContain("toggleKey");
   expect(html).toContain('src="/__pincer/overlay.js"');
   // Config lands in <head>, loader in <body>.
   expect(html.indexOf("window.__PINCER__")).toBeLessThan(html.indexOf("</head>"));
@@ -76,8 +78,9 @@ test("serves the overlay bundle at /__pincer/overlay.js", async () => {
   proxy = startProxyFor(upstream);
 
   const res = await fetch(`http://127.0.0.1:${proxy.port}/__pincer/overlay.js`);
+  expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toContain("javascript");
-  expect([200, 503]).toContain(res.status);
+  expect((await res.text()).length).toBeGreaterThan(1_000);
 });
 
 test("proxies WebSocket traffic both ways", async () => {

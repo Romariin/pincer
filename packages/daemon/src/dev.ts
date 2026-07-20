@@ -1,12 +1,11 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import overlayBundle from "@pincer/overlay/dist/overlay.js" with { type: "text" };
 import type { Server, ServerWebSocket, Subprocess } from "bun";
 import { CONTRACT_A_VERSION } from "@pincer/core";
 import { isLocalOrigin, startDaemon, type RunningDaemon } from "./server";
+import { stopProcessTree } from "./processTree";
 
 /**
- * `pincer dev -- <cmd>`: wraps the app's own dev server behind an injection
+ * `pincer -- <cmd>`: wraps the app's own dev server behind an injection
  * proxy so the overlay works with zero per-app install. The proxy rewrites
  * HTML responses to add the `window.__PINCER__` config and the overlay loader
  * (same two tags the Vite plugin injects), serves the overlay bundle at
@@ -26,7 +25,6 @@ export interface DevProxyOptions {
   /** Daemon WebSocket URL injected into the page config. */
   wsUrl: string;
   projectRoot: string;
-  toggleKey?: string;
   log?: (msg: string) => void;
 }
 
@@ -43,32 +41,8 @@ export interface ProxyWsData {
   pending: (string | Uint8Array)[];
 }
 
-function resolveOverlayPath(log: (msg: string) => void): string | null {
-  try {
-    const pkgJson = fileURLToPath(import.meta.resolve("@pincer/overlay/package.json"));
-    return join(dirname(pkgJson), "dist/overlay.js");
-  } catch {
-    log("cannot resolve @pincer/overlay — run `bun run build:overlay`.");
-    return null;
-  }
-}
-
-function overlayResponse(overlayPath: string | null): Response {
-  let bundle: Buffer | null = null;
-  if (overlayPath) {
-    try {
-      bundle = readFileSync(overlayPath);
-    } catch {
-      bundle = null;
-    }
-  }
-  if (!bundle) {
-    return new Response("// pincer overlay not built — run `bun run build:overlay`", {
-      status: 503,
-      headers: { "content-type": "text/javascript" },
-    });
-  }
-  return new Response(new Uint8Array(bundle), {
+function overlayResponse(): Response {
+  return new Response(overlayBundle, {
     headers: { "content-type": "text/javascript", "cache-control": "no-store" },
   });
 }
@@ -92,15 +66,12 @@ function forwardableCloseCode(code: number): number {
 }
 
 export function startDevProxy(opts: DevProxyOptions): RunningProxy {
-  const log = opts.log ?? (() => {});
   const target = new URL(opts.target);
   const wsTargetBase = `${target.protocol === "https:" ? "wss" : "ws"}://${target.host}`;
-  const overlayPath = resolveOverlayPath(log);
   const pageConfig = {
     wsUrl: opts.wsUrl,
     contractAVersion: CONTRACT_A_VERSION,
     projectRoot: opts.projectRoot,
-    toggleKey: opts.toggleKey ?? "Alt+Shift+P",
   };
 
   const server = Bun.serve<ProxyWsData>({
@@ -109,7 +80,7 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
     async fetch(req, srv) {
       const url = new URL(req.url);
 
-      if (url.pathname === "/__pincer/overlay.js") return overlayResponse(overlayPath);
+      if (url.pathname === "/__pincer/overlay.js") return overlayResponse();
 
       if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         const origin = req.headers.get("origin");
@@ -179,8 +150,12 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
           for (const m of ws.data.pending) upstream.send(m);
           ws.data.pending = [];
         };
-        upstream.onmessage = (ev) => {
-          ws.send(typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data as ArrayBuffer));
+        upstream.onmessage = (event) => {
+          if (typeof event.data === "string") ws.send(event.data);
+          else if (event.data instanceof ArrayBuffer) ws.send(new Uint8Array(event.data));
+          else if (ArrayBuffer.isView(event.data)) {
+            ws.send(new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength));
+          }
         };
         upstream.onclose = (ev) => {
           ws.close(forwardableCloseCode(ev.code), ev.reason);
@@ -241,6 +216,7 @@ function spawnDevServer(command: string[], cwd: string): SpawnedDev {
     cmd: command,
     cwd,
     env: { ...process.env, FORCE_COLOR: "1" },
+    detached: process.platform !== "win32",
     stdin: "inherit",
     stdout: "pipe",
     stderr: "pipe",
@@ -301,9 +277,9 @@ export interface DevOptions {
   command: string[];
   /** Skip URL detection and proxy straight to this upstream. */
   target?: string;
-  toggleKey?: string;
   agentId?: string;
   agentCommand?: string[];
+  dataRoot?: string;
   log: (msg: string) => void;
 }
 
@@ -313,6 +289,7 @@ export async function runDev(opts: DevOptions): Promise<void> {
     port: opts.daemonPort,
     agentId: opts.agentId,
     agentCommand: opts.agentCommand,
+    dataRoot: opts.dataRoot,
     log: opts.log,
   });
   opts.log(`daemon on ws://127.0.0.1:${daemon.port}, project ${opts.projectRoot}, agent ${daemon.orchestrator.agentId ?? "none"}`);
@@ -322,28 +299,29 @@ export async function runDev(opts: DevOptions): Promise<void> {
   const spawned = opts.command.length > 0 ? spawnDevServer(opts.command, opts.projectRoot) : null;
 
   let proxy: RunningProxy | undefined;
-  const shutdown = (code: number): never => {
-    proxy?.stop();
-    spawned?.child.kill();
-    daemon.stop();
-    process.exit(code);
-  };
-  process.on("SIGINT", () => shutdown(0));
-  process.on("SIGTERM", () => shutdown(0));
-  if (spawned) {
-    void spawned.child.exited.then((code) => {
+  let shutdownPromise: Promise<never> | null = null;
+  const shutdown = (code: number): Promise<never> => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
       proxy?.stop();
-      daemon.stop();
+      await Promise.all([
+        spawned ? stopProcessTree(spawned.child) : Promise.resolve(),
+        daemon.stop(),
+      ]);
       process.exit(code);
-    });
-  }
+    })();
+    return shutdownPromise;
+  };
+  process.once("SIGINT", () => void shutdown(0));
+  process.once("SIGTERM", () => void shutdown(0));
+  if (spawned) void spawned.child.exited.then((code) => void shutdown(code));
 
   let target: string;
   if (opts.target) {
     target = opts.target;
   } else if (!spawned) {
     opts.log("nothing to proxy: pass a command after -- or an explicit --target");
-    shutdown(1);
+    await shutdown(1);
     return;
   } else {
     const hint = setTimeout(() => {
@@ -354,20 +332,25 @@ export async function runDev(opts: DevOptions): Promise<void> {
     } catch (err) {
       clearTimeout(hint);
       opts.log(err instanceof Error ? err.message : String(err));
-      shutdown(1);
+      await shutdown(1);
       return;
     }
     clearTimeout(hint);
   }
 
-  proxy = startDevProxy({
-    target,
-    port: opts.proxyPort,
-    wsUrl: `ws://127.0.0.1:${daemon.port}`,
-    projectRoot: opts.projectRoot,
-    toggleKey: opts.toggleKey,
-    log: opts.log,
-  });
+  try {
+    proxy = startDevProxy({
+      target,
+      port: opts.proxyPort,
+      wsUrl: `ws://127.0.0.1:${daemon.port}`,
+      projectRoot: opts.projectRoot,
+      log: opts.log,
+    });
+  } catch (err) {
+    opts.log(err instanceof Error ? err.message : String(err));
+    await shutdown(1);
+    return;
+  }
 
   console.log(`\n  pincer ready → open http://localhost:${proxy.port}  (proxying ${target})\n`);
 }

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { AgentTask } from "@pincer/core";
 import { composePrompt } from "../src/agents/prompt";
 
-const base = { prompt: "make it red", projectRoot: "/tmp", conversationId: "c1", resumeSessionId: null, model: null, effort: null };
+const base = { prompt: "make it red", projectRoot: "/tmp", pincerDataDir: "/tmp/.pincer-data", conversationId: "c1", resumeSessionId: null, model: null, effort: null };
 
 test("single-element prompt names the source and element", () => {
   const task: AgentTask = {

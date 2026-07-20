@@ -16,6 +16,7 @@ import {
 import type { Git } from "./git";
 import type { ResolvedHarness } from "./agents/registry";
 import type { ConversationRow, Store, TurnRow } from "./store";
+import { signalProcessTree } from "./processTree";
 
 export type Emit = (msg: ServerMessage) => void;
 
@@ -23,6 +24,7 @@ export interface OrchestratorDeps {
   git: Git;
   store: Store;
   projectRoot: string;
+  pincerDataDir: string;
   harnesses: ResolvedHarness[];
   log?: (msg: string) => void;
 }
@@ -44,16 +46,20 @@ export class Orchestrator {
   private readonly git: Git;
   private readonly store: Store;
   private readonly projectRoot: string;
+  private readonly pincerDataDir: string;
   private readonly harnesses: ResolvedHarness[];
   private readonly log: (msg: string) => void;
 
   private activeConversationId: string | null = null;
   private activeTurn: ActiveTurn | null = null;
+  private activeRun: Promise<void> | null = null;
+  private stopping = false;
 
   constructor(deps: OrchestratorDeps) {
     this.git = deps.git;
     this.store = deps.store;
     this.projectRoot = deps.projectRoot;
+    this.pincerDataDir = deps.pincerDataDir;
     this.harnesses = deps.harnesses;
     this.log = deps.log ?? (() => {});
   }
@@ -153,6 +159,32 @@ export class Orchestrator {
     elements: PromptElement[],
     emit: Emit,
   ): Promise<void> {
+    if (this.activeRun || this.stopping) {
+      emit({
+        v: PROTOCOL_VERSION,
+        type: "blocked",
+        reason: "busy",
+        message: this.stopping ? "Pincer is shutting down." : "A turn is already running.",
+      });
+      return;
+    }
+    const run = this.runTurnInternal(conversationId, prompt, source, domContext, elements, emit);
+    this.activeRun = run;
+    try {
+      await run;
+    } finally {
+      if (this.activeRun === run) this.activeRun = null;
+    }
+  }
+
+  private async runTurnInternal(
+    conversationId: string,
+    prompt: string,
+    source: SourceLocation | null,
+    domContext: DomContext,
+    elements: PromptElement[],
+    emit: Emit,
+  ): Promise<void> {
     const conv = this.store.getConversation(conversationId);
     if (!conv) {
       emit(this.unknownConversation());
@@ -176,6 +208,7 @@ export class Orchestrator {
     // Snapshot the tree before emitting turn_started so the only await stays
     // ahead of activeTurn being set (else a fast cancel would race and miss).
     const beforeDiff = await this.snapshotDiff();
+    if (this.stopping) return;
 
     const seq = this.store.getTurns(conversationId).length + 1;
     const last = this.store.lastActiveTurn(conversationId);
@@ -203,6 +236,7 @@ export class Orchestrator {
       domContext,
       elements,
       projectRoot: this.projectRoot,
+      pincerDataDir: this.pincerDataDir,
       conversationId,
       resumeSessionId,
       model: conv.model || null,
@@ -223,6 +257,7 @@ export class Orchestrator {
       const proc = Bun.spawn(inv.argv, {
         cwd: this.projectRoot,
         env: process.env,
+        detached: process.platform !== "win32",
         stdout: "pipe",
         stderr: "pipe",
         stdin: inv.stdin ? "pipe" : "ignore",
@@ -382,10 +417,19 @@ export class Orchestrator {
       .slice(0, MAX_DIFF_FILES);
   }
 
+  async stop(): Promise<void> {
+    this.stopping = true;
+    if (this.activeTurn) {
+      this.activeTurn.cancelled = true;
+      signalProcessTree(this.activeTurn.proc);
+    }
+    await this.activeRun;
+  }
+
   cancel(conversationId: string): void {
     if (this.activeTurn && this.activeTurn.conversationId === conversationId) {
       this.activeTurn.cancelled = true;
-      this.activeTurn.proc.kill();
+      signalProcessTree(this.activeTurn.proc);
     }
   }
 

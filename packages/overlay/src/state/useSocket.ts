@@ -10,10 +10,22 @@ export function useSocket(): void {
   const setSend = usePincerStore((s) => s.setSend);
   const setConnected = usePincerStore((s) => s.setConnected);
   const applyServerMessage = usePincerStore((s) => s.applyServerMessage);
+  const prepareSettings = usePincerStore((s) => s.prepareSettings);
 
   useEffect(() => {
     const config = window.__PINCER__ ?? {};
     const wsUrl = config.wsUrl ?? "ws://127.0.0.1:7391";
+    const appRoot =
+      typeof config.projectRoot === "string" && config.projectRoot.length > 0 ? config.projectRoot : null;
+    const appOrigin =
+      window.location.protocol === "http:" || window.location.protocol === "https:"
+        ? window.location.origin
+        : null;
+    const identityError =
+      appRoot && appOrigin
+        ? null
+        : "Pincer app identity requires the Vite integration on an HTTP(S) preview.";
+    prepareSettings(appRoot, appOrigin, identityError);
 
     let ws: WebSocket | null = null;
     let backoff = 500;
@@ -44,7 +56,16 @@ export function useSocket(): void {
       socket.addEventListener("open", () => {
         backoff = 500;
         setConnected(true);
+        prepareSettings(appRoot, appOrigin, identityError);
         send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+        if (appRoot && appOrigin) {
+          send({
+            v: PROTOCOL_VERSION,
+            type: "get_overlay_settings",
+            appRoot,
+            appOrigin,
+          });
+        }
       });
       socket.addEventListener("message", (ev: MessageEvent) => {
         try {
@@ -68,5 +89,5 @@ export function useSocket(): void {
       clearTimeout(timer);
       ws?.close();
     };
-  }, [setSend, setConnected, applyServerMessage]);
+  }, [setSend, setConnected, applyServerMessage, prepareSettings]);
 }

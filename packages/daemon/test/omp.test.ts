@@ -34,7 +34,7 @@ async function runTurn(harness: Harness, convId: string, prompt: string): Promis
 }
 
 function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> {
-  const db = new Database(join(harness.dir, ".pincer/history.db"));
+  const db = new Database(harness.historyDbPath);
   try {
     const row = db
       .query("SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1")
@@ -73,6 +73,8 @@ test("omp happy turn edits the file in place and captures the session id", async
   expect(argv).toContain("json");
   expect(argv).toContain("--auto-approve");
   expect(argv).toContain("--session-dir");
+  const sessionDirIndex = argv.indexOf("--session-dir");
+  expect(argv[sessionDirIndex + 1]).toBe(join(h.pincerDataDir, "omp-sessions"));
   expect(argv).not.toContain("-r");
   // Source path and user prompt live inside the trailing composed positional arg.
   const composed = argv[argv.length - 1] ?? "";
