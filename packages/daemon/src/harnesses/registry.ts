@@ -3,13 +3,22 @@ import { claudeHarness } from "./claude";
 import { codexHarness } from "./codex";
 import { ompHarness } from "./omp";
 import { HarnessRunner } from "./runner";
-import type { HarnessDefinition, InstalledHarness } from "./types";
+import type {
+	HarnessDefinition,
+	HarnessRuntimeContext,
+	InstalledHarness,
+} from "./types";
 
 export interface HarnessRegistryConfig {
+	/** Definitions to resolve. Defaults to the built-in deterministic list. */
+	definitions?: readonly HarnessDefinition[];
 	/** Explicit Harness default. Unknown ids are errors; known but unavailable ids resolve to null. */
 	selectedId?: string;
 	/** Per-Harness base argv overrides. Every key must name a registered Harness. */
 	commands?: Record<string, string[]>;
+	/** Project and environment used by CLI probes and advisory catalog commands. */
+	projectRoot?: string;
+	env?: HarnessRuntimeContext["env"];
 }
 
 export interface ResolvedHarnesses {
@@ -45,8 +54,11 @@ export const HARNESS_DEFINITIONS = defineHarnesses([
 export async function resolveHarnesses(
 	config: HarnessRegistryConfig = {},
 ): Promise<ResolvedHarnesses> {
+	const definitions = defineHarnesses(
+		config.definitions ?? HARNESS_DEFINITIONS,
+	);
 	const byId = new Map(
-		HARNESS_DEFINITIONS.map((definition) => [definition.id, definition]),
+		definitions.map((definition) => [definition.id, definition]),
 	);
 	if (config.selectedId !== undefined && !byId.has(config.selectedId)) {
 		throw new Error(`Unknown Harness id: ${config.selectedId}`);
@@ -69,10 +81,13 @@ export async function resolveHarnesses(
 	}
 
 	const harnesses = await Promise.all(
-		HARNESS_DEFINITIONS.map((definition) => {
+		definitions.map((definition) => {
 			const command =
 				config.commands?.[definition.id] ?? definition.defaultCommand;
-			return HarnessRunner.install(definition, [...command]);
+			return HarnessRunner.install(definition, [...command], {
+				projectRoot: config.projectRoot ?? process.cwd(),
+				env: config.env ?? process.env,
+			});
 		}),
 	);
 
@@ -94,6 +109,11 @@ export function harnessDescriptors(
 		id: harness.definition.id,
 		...harness.definition.display,
 		detected: harness.detected,
+		capabilities: { ...harness.definition.capabilities },
+		catalog: {
+			status: harness.catalog.status,
+			diagnostics: [...harness.catalog.diagnostics],
+		},
 		models: harness.models.map((model) => ({
 			...model,
 			efforts: [...model.efforts],

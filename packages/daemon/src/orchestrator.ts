@@ -99,8 +99,7 @@ export class Orchestrator {
 		if (!harness) return this.unknownHarness(selectedId);
 		if (!harness.detected) return this.unavailableHarness(selectedId);
 
-		const model = config.model || harness.models[0]?.id;
-		if (!model) return this.unavailableHarness(selectedId);
+		const model = config.model ?? "";
 		const effort = config.effort ?? "";
 
 		const id = crypto.randomUUID().slice(0, 8);
@@ -313,12 +312,14 @@ export class Orchestrator {
 		const turns = this.store.getTurns(submission.conversationId);
 		const seq = turns.length + 1;
 		let resumeToken: string | null = null;
-		for (let index = turns.length - 1; index >= 0; index -= 1) {
-			const turn = turns[index];
-			if (!turn || turn.harness_id !== submission.selection.harnessId) break;
-			if (turn.status !== "complete") continue;
-			resumeToken = turn.resume_token;
-			break;
+		if (harness.definition.capabilities.resume) {
+			for (let index = turns.length - 1; index >= 0; index -= 1) {
+				const turn = turns[index];
+				if (!turn || turn.harness_id !== submission.selection.harnessId) break;
+				if (turn.status !== "complete") continue;
+				resumeToken = turn.resume_token;
+				break;
+			}
 		}
 
 		const turnId = this.store.addTurn({

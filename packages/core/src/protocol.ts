@@ -21,10 +21,23 @@ export interface HarnessDisplay {
 	c2: string;
 }
 
+export interface HarnessCapabilities {
+	model: boolean;
+	effort: boolean;
+	resume: boolean;
+}
+
+export interface HarnessCatalogState {
+	status: "ready" | "unsupported" | "failed";
+	diagnostics: string[];
+}
+
 /** Browser-safe startup projection of a daemon-private HarnessDefinition. */
 export interface HarnessDescriptor extends HarnessDisplay {
 	id: string;
 	detected: boolean;
+	capabilities: HarnessCapabilities;
+	catalog: HarnessCatalogState;
 	models: HarnessModel[];
 }
 

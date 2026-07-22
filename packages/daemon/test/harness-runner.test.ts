@@ -1,5 +1,11 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessEvent } from "@pincer/core";
@@ -23,6 +29,7 @@ afterEach(() => {
 const definition: HarnessDefinition = {
 	id: "contract-harness",
 	display: { label: "Contract", glyph: "C", c1: "#000", c2: "#fff" },
+	capabilities: { model: true, effort: true, resume: true },
 	defaultCommand: [],
 	probeArgs: ["--version"],
 	catalog: {
@@ -130,6 +137,7 @@ async function runPlan(
 		definition,
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
 		detected: true,
+		catalog: { status: "ready", diagnostics: [] },
 		models: [],
 	};
 	const running = new HarnessRunner().start(
@@ -144,11 +152,12 @@ const installationCases: [
 	name: string,
 	catalogOutput: string | null,
 	expectedDetected: boolean,
+	expectedCatalogStatus: "ready" | "failed",
 	expectedModels: { id: string; label: string; efforts: string[] }[],
 ][] = [
-	["an unavailable CLI", null, false, []],
-	["a malformed catalog response", "not-json", false, []],
-	["an empty catalog", JSON.stringify({ models: [] }), false, []],
+	["an unavailable CLI", null, false, "failed", []],
+	["a malformed catalog response", "not-json", true, "failed", []],
+	["an empty catalog", JSON.stringify({ models: [] }), true, "ready", []],
 	[
 		"a non-empty CLI catalog",
 		JSON.stringify({
@@ -161,6 +170,7 @@ const installationCases: [
 			],
 		}),
 		true,
+		"ready",
 		[
 			{
 				id: "cli/model-2026",
@@ -172,8 +182,14 @@ const installationCases: [
 ];
 
 test.each(installationCases)(
-	"installer exposes models only for %s with at least one decoded catalog model",
-	async (_name, catalogOutput, expectedDetected, expectedModels) => {
+	"installer separates CLI availability from the advisory catalog for %s",
+	async (
+		_name,
+		catalogOutput,
+		expectedDetected,
+		expectedCatalogStatus,
+		expectedModels,
+	) => {
 		let command: string[];
 		if (catalogOutput === null) {
 			command = [`pincer-test-missing-runner-${crypto.randomUUID()}`];
@@ -186,12 +202,40 @@ test.each(installationCases)(
 			command = ["bun", FAKE_RUNNER, planPath, recordPath];
 		}
 
-		const installed = await HarnessRunner.install(definition, command);
+		const installed = await HarnessRunner.install(definition, command, {
+			projectRoot: "/tmp",
+			env: process.env,
+		});
 
 		expect(installed.detected).toBe(expectedDetected);
+		expect(installed.catalog.status).toBe(expectedCatalogStatus);
+		expect(installed.catalog.diagnostics.length).toBe(
+			expectedCatalogStatus === "failed" ? 1 : 0,
+		);
 		expect(installed.models).toEqual(expectedModels);
 	},
 );
+
+test("installer marks an omitted advisory catalog as unsupported without hiding the CLI", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-no-catalog-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	writeFileSync(planPath, JSON.stringify({}));
+	const withoutCatalog: HarnessDefinition = { ...definition, catalog: undefined };
+
+	const installed = await HarnessRunner.install(
+		withoutCatalog,
+		["bun", FAKE_RUNNER, planPath, recordPath],
+		{ projectRoot: root, env: process.env },
+	);
+
+	expect(installed).toMatchObject({
+		detected: true,
+		catalog: { status: "unsupported", diagnostics: [] },
+		models: [],
+	});
+});
 
 test("runner preserves invocation bytes, expands multi-event records, and diagnoses only invalid records", async () => {
 	const observed: HarnessEvent[] = [];
@@ -306,8 +350,8 @@ test.each(completionCases)(
 	},
 );
 
-test("runner bounds captured stderr without changing the process completion rule", async () => {
-	const stderr = "E".repeat(20_000);
+test("runner retains the bounded stderr tail without changing the process completion rule", async () => {
+	const stderr = `${"prefix".repeat(4_000)}${"T".repeat(16_384)}`;
 	const { outcome } = await runPlan({
 		records: [
 			{
@@ -319,7 +363,22 @@ test("runner bounds captured stderr without changing the process completion rule
 	});
 	expect(outcome.status).toBe("succeeded");
 	expect(outcome.stderr).toHaveLength(16_384);
-	expect(outcome.stderr).toBe("E".repeat(16_384));
+	expect(outcome.stderr).toBe("T".repeat(16_384));
+});
+
+test("runner discards an oversized NDJSON line and continues at the next record", async () => {
+	const terminal = JSON.stringify({
+		type: "batch",
+		events: [{ kind: "result", success: true, summary: "done" }],
+	});
+	const { outcome } = await runPlan({
+		rawLines: ["X".repeat(1_048_577), terminal],
+	});
+
+	expect(outcome.status).toBe("succeeded");
+	expect(outcome.diagnostics).toContain(
+		"Harness NDJSON record exceeded 1048576 bytes",
+	);
 });
 
 test("runner cancellation terminates the Harness process group, including descendants", async () => {
@@ -341,6 +400,7 @@ test("runner cancellation terminates the Harness process group, including descen
 		definition,
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
 		detected: true,
+		catalog: { status: "ready", diagnostics: [] },
 		models: [],
 	};
 	let signalReady = (): void => {};
@@ -363,4 +423,93 @@ test("runner cancellation terminates the Harness process group, including descen
 		summary: "Turn cancelled.",
 	});
 	expect(() => process.kill(childPid, 0)).toThrow();
+});
+
+test("cancellation stops descendants after the Harness leader has already exited", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-leader-exited-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(planPath, JSON.stringify({ childPidFile }));
+	const installed: InstalledHarness = {
+		definition,
+		command: ["bun", FAKE_RUNNER, planPath, recordPath],
+		detected: true,
+		catalog: { status: "ready", diagnostics: [] },
+		models: [],
+	};
+	const running = new HarnessRunner().start(
+		installed,
+		request({ projectRoot: root }),
+		() => {},
+	);
+	await running.outcome;
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+	expect(() => process.kill(childPid, 0)).not.toThrow();
+
+	try {
+		await running.cancel();
+		expect(() => process.kill(childPid, 0)).toThrow();
+	} finally {
+		try {
+			process.kill(childPid, "SIGKILL");
+		} catch {}
+	}
+});
+
+test("installation probes and catalogs in the target project with the supplied environment", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-context-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	writeFileSync(planPath, JSON.stringify({ rawLines: [JSON.stringify({ models: [] })] }));
+
+	await HarnessRunner.install(
+		definition,
+		["bun", FAKE_RUNNER, planPath, recordPath],
+		{
+			projectRoot: root,
+			env: { ...process.env, PINCER_TEST_ENV_MARKER: "target-environment" },
+		},
+	);
+
+	expect(JSON.parse(readFileSync(recordPath, "utf8"))).toMatchObject({
+		cwd: realpathSync(root),
+		envMarker: "target-environment",
+	});
+});
+
+test("installation normalizes and deduplicates advisory model records", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-normalize-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	writeFileSync(
+		planPath,
+		JSON.stringify({
+			rawLines: [
+				JSON.stringify({
+					models: [
+						{
+							id: " model-a ",
+							label: " Model A ",
+							efforts: [" high ", "", "high"],
+						},
+						{ id: "model-a", label: "duplicate", efforts: [] },
+						{ id: "", label: "invalid", efforts: [] },
+					],
+				}),
+			],
+		}),
+	);
+
+	const installed = await HarnessRunner.install(
+		definition,
+		["bun", FAKE_RUNNER, planPath, recordPath],
+		{ projectRoot: root, env: process.env },
+	);
+	expect(installed.models).toEqual([
+		{ id: "model-a", label: "Model A", efforts: ["high"] },
+	]);
 });

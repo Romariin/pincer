@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
 
 interface RunnerPlan {
 	records?: unknown[];
@@ -21,7 +22,15 @@ if (!planPath || !recordPath) {
 
 const plan = (await Bun.file(planPath).json()) as RunnerPlan;
 const stdin = await Bun.stdin.text();
-await Bun.write(recordPath, JSON.stringify({ argv: Bun.argv.slice(2), stdin }));
+await Bun.write(
+	recordPath,
+	JSON.stringify({
+		argv: Bun.argv.slice(2),
+		stdin,
+		cwd: process.cwd(),
+		envMarker: process.env.PINCER_TEST_ENV_MARKER,
+	}),
+);
 
 if (plan.childPidFile) {
 	const child = Bun.spawn(["bun", "-e", "setInterval(() => {}, 1000)"], {
@@ -33,9 +42,13 @@ if (plan.childPidFile) {
 	writeFileSync(plan.childPidFile, String(child.pid));
 }
 
-for (const line of plan.rawLines ?? []) process.stdout.write(`${line}\n`);
+async function writeStdout(value: string): Promise<void> {
+	if (!process.stdout.write(value)) await once(process.stdout, "drain");
+}
+
+for (const line of plan.rawLines ?? []) await writeStdout(`${line}\n`);
 for (const record of plan.records ?? [])
-	process.stdout.write(`${JSON.stringify(record)}\n`);
+	await writeStdout(`${JSON.stringify(record)}\n`);
 if (plan.stderr) process.stderr.write(plan.stderr);
 if (plan.readyFile) writeFileSync(plan.readyFile, "ready");
 if (plan.waitFor) {

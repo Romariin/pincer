@@ -114,6 +114,8 @@ function harness(
 		c1: "#111111",
 		c2: "#222222",
 		detected: true,
+		capabilities: { model: true, effort: true, resume: true },
+		catalog: { status: "ready", diagnostics: [] },
 		models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }],
 		...overrides,
 	};
@@ -542,7 +544,7 @@ test("cancel requests are sent only for the visible queued or running conversati
 	expect(requireThread("hidden").turnState).toBe("running");
 });
 
-test("welcome initializes a new draft from the first catalog model with no effort", () => {
+test("welcome initializes a new draft with the CLI-default model", () => {
 	resetStore();
 	const selectable = harness("selectable", {
 		models: [
@@ -555,12 +557,12 @@ test("welcome initializes a new draft from the first catalog model with no effor
 
 	expect(usePincerStore.getState().draft).toEqual({
 		harnessId: "selectable",
-		model: "catalog-first",
+		model: "",
 		effort: "",
 	});
 });
 
-test("welcome repairs a legacy empty model from the catalog without inventing an effort", () => {
+test("welcome preserves an empty CLI-default model and its opaque effort", () => {
 	resetStore();
 	const selectable = harness("selectable", {
 		models: [
@@ -578,8 +580,8 @@ test("welcome repairs a legacy empty model from the catalog without inventing an
 
 	expect(usePincerStore.getState().draft).toEqual({
 		harnessId: "selectable",
-		model: "catalog-first",
-		effort: "",
+		model: "",
+		effort: "legacy-default",
 	});
 });
 
@@ -672,7 +674,7 @@ test("an explicit null default Harness never falls back to another detected Harn
 	expect(usePincerStore.getState().draft.harnessId).toBe("");
 });
 
-test("switching Harness selects its first catalog model and clears effort", () => {
+test("switching Harness selects its CLI-default model and clears effort", () => {
 	resetStore();
 	const source = harness("source");
 	const destination = harness("destination", {
@@ -696,7 +698,7 @@ test("switching Harness selects its first catalog model and clears effort", () =
 
 	expect(usePincerStore.getState().draft).toEqual({
 		harnessId: "destination",
-		model: "destination-first",
+		model: "",
 		effort: "",
 	});
 });

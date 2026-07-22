@@ -11,7 +11,7 @@ afterEach(async () => {
 	harness = undefined;
 });
 
-test("welcome exposes protocol-v4 catalog-only Harness descriptors and only CLI-reported OMP models", async () => {
+test("welcome exposes protocol-v5 capabilities, advisory catalog state, and CLI-reported OMP models", async () => {
 	harness = await createHarness({ selectedHarnessId: "omp" });
 	const welcome = await harness.next("welcome");
 	const omp = welcome.harnesses.find((candidate) => candidate.id === "omp");
@@ -21,6 +21,8 @@ test("welcome exposes protocol-v4 catalog-only Harness descriptors and only CLI-
 	expect(Object.keys(omp ?? {}).sort()).toEqual([
 		"c1",
 		"c2",
+		"capabilities",
+		"catalog",
 		"detected",
 		"glyph",
 		"icon",
@@ -28,7 +30,12 @@ test("welcome exposes protocol-v4 catalog-only Harness descriptors and only CLI-
 		"label",
 		"models",
 	]);
-	expect(omp).toMatchObject({ id: "omp", detected: true });
+	expect(omp).toMatchObject({
+		id: "omp",
+		detected: true,
+		capabilities: { model: true, effort: true, resume: true },
+		catalog: { status: "ready", diagnostics: [] },
+	});
 	expect(omp?.models).toEqual([
 		{
 			id: "anthropic/claude-opus-4-8",
@@ -61,6 +68,8 @@ test("welcome exposes Claude's control-initialized picker models and efforts", a
 	expect(Object.keys(claude ?? {}).sort()).toEqual([
 		"c1",
 		"c2",
+		"capabilities",
+		"catalog",
 		"detected",
 		"glyph",
 		"icon",
@@ -95,21 +104,13 @@ test("welcome exposes Claude's control-initialized picker models and efforts", a
 
 const unavailableHarnessCases: {
 	name: string;
-	harnessId: "codex" | "omp";
+	harnessId: "codex";
 	options: Parameters<typeof createHarness>[0];
 }[] = [
 	{
 		name: "its CLI probe fails",
 		harnessId: "codex",
 		options: { selectedHarnessId: "codex" },
-	},
-	{
-		name: "its CLI catalog command fails",
-		harnessId: "omp",
-		options: {
-			selectedHarnessId: "omp",
-			plan: { catalogExitCode: 9 },
-		},
 	},
 ];
 
@@ -130,6 +131,27 @@ test.each(unavailableHarnessCases)(
 		});
 	},
 );
+
+test("a failed advisory catalog does not hide an available selected Harness", async () => {
+	harness = await createHarness({
+		selectedHarnessId: "omp",
+		plan: { catalogExitCode: 9 },
+	});
+	const welcome = await harness.next("welcome");
+	const omp = welcome.harnesses.find((candidate) => candidate.id === "omp");
+
+	expect(welcome.defaultHarnessId).toBe("omp");
+	expect(omp).toMatchObject({
+		detected: true,
+		catalog: { status: "failed" },
+		models: [],
+	});
+
+	harness.send({ v: V, type: "new_conversation", harnessId: "omp" });
+	expect(await harness.next("conversation_started")).toMatchObject({
+		conversation: { harnessId: "omp", model: "", effort: "" },
+	});
+});
 
 test("conversation selection preserves opaque model and effort values into the real OMP invocation", async () => {
 	harness = await createHarness();

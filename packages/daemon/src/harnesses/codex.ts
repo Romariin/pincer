@@ -1,20 +1,11 @@
 import type { HarnessEvent, HarnessModel } from "@pincer/core";
+import {
+	asRecord as record,
+	asString as string,
+	decodedEvents as events,
+} from "./adapter";
 import { composePrompt } from "./prompt";
-import type { HarnessDecodeResult, HarnessDefinition } from "./types";
-
-function record(value: unknown): Record<string, unknown> | null {
-	return value !== null && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
-
-function string(value: unknown): string | undefined {
-	return typeof value === "string" ? value : undefined;
-}
-
-function events(items: HarnessEvent[]): HarnessDecodeResult {
-	return { kind: "events", events: items };
-}
+import type { HarnessDefinition } from "./types";
 
 function summary(value: unknown): string {
 	if (typeof value === "string") return value;
@@ -75,6 +66,7 @@ export const codexHarness: HarnessDefinition = {
 		c1: "#3ecf8e",
 		c2: "#199e68",
 	},
+	capabilities: { model: true, effort: true, resume: true },
 	defaultCommand: ["codex"],
 	probeArgs: ["--version"],
 	catalog: {

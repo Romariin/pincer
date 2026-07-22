@@ -7,6 +7,8 @@ export const FALLBACK_HARNESS: HarnessDescriptor = {
 	c1: "#4a4a50",
 	c2: "#333338",
 	detected: false,
+	capabilities: { model: false, effort: false, resume: false },
+	catalog: { status: "unsupported", diagnostics: [] },
 	models: [],
 };
 

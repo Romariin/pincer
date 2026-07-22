@@ -605,10 +605,9 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 			const state = get();
 			const current = computeCfg(state);
 			if (kind === "harness") {
-				const info = harnessInfo(state.harnessMap, value);
 				const patch: Partial<Cfg> = { harnessId: value };
 				if (value !== current.harnessId) {
-					patch.model = info.models[0]?.id ?? "";
+					patch.model = "";
 					patch.effort = "";
 				}
 				state.updateCfg(patch);
@@ -696,13 +695,8 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							? harnessMap[state.draft.harnessId]
 							: undefined;
 					const harnessId = retained ? state.draft.harnessId : defaultHarnessId;
-					const info = harnessInfo(harnessMap, harnessId);
-					const model =
-						retained && state.draft.model
-							? state.draft.model
-							: (info.models[0]?.id ?? "");
-					const effort =
-						retained && state.draft.model ? state.draft.effort : "";
+					const model = retained ? state.draft.model : "";
+					const effort = retained ? state.draft.effort : "";
 					set({
 						harnesses: message.harnesses,
 						harnessMap,

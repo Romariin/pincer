@@ -70,6 +70,8 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	const resolved = await resolveHarnesses({
 		selectedId: opts.selectedHarnessId,
 		commands: opts.harnessCommands,
+		projectRoot: opts.projectRoot,
+		env: process.env,
 	});
 	const store = new Store(join(pincerDataDir, "history.db"));
 	const settingsStore = new SettingsStore(settingsDbPath(dataRoot));

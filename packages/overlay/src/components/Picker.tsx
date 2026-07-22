@@ -261,12 +261,12 @@ export function Picker({ container }: { container: Container }): ReactNode {
 					<Section label="HARNESS">
 						<HarnessCombobox container={container} />
 					</Section>
-					{info.models.length > 0 ? (
+					{info.capabilities.model && info.models.length > 0 ? (
 						<Section label="MODEL">
 							<ModelCombobox container={container} />
 						</Section>
 					) : null}
-					{effortList.length > 1 ? (
+					{info.capabilities.effort && effortList.length > 1 ? (
 						<Section label="EFFORT">
 							<EffortSlider
 								list={effortList}
