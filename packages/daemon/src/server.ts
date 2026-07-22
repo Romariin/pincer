@@ -1,22 +1,21 @@
-import type { Server, ServerWebSocket } from "bun";
 import { realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
-	PROTOCOL_VERSION,
-	isKeyboardShortcut,
+	type ClientMessage,
+	type ClientMessageType,
 	type ConversationConfig,
-	type DomContext,
 	type KeyboardShortcut,
+	MAX_CLIENT_FRAME_BYTES,
 	type OverlaySettings,
-	type PromptElement,
+	PROTOCOL_VERSION,
+	parseClientMessage,
 	type ServerMessage,
-	type SourceLocation,
 } from "@pincer/core";
+import type { Server, ServerWebSocket } from "bun";
 import { Git } from "./git";
-import { Store } from "./store";
 import { harnessDescriptors, resolveHarnesses } from "./harnesses/registry";
-import { Orchestrator } from "./orchestrator";
 import type { Emit } from "./orchestrator";
+import { Orchestrator } from "./orchestrator";
 import {
 	defaultDataRoot,
 	migrateLegacyProjectData,
@@ -25,6 +24,7 @@ import {
 	settingsDbPath,
 } from "./paths";
 import { SettingsStore } from "./settingsStore";
+import { Store } from "./store";
 
 const DAEMON_VERSION = "0.1.0";
 
@@ -46,6 +46,7 @@ export interface DaemonOptions {
 	harnessCommands?: Record<string, string[]>;
 	log?: (message: string) => void;
 	dataRoot?: string;
+	signal?: AbortSignal;
 }
 
 export interface RunningDaemon {
@@ -58,7 +59,7 @@ export interface RunningDaemon {
 export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	const log = opts.log ?? (() => {});
 	const git = new Git(opts.projectRoot);
-	if (!(await git.isInsideWorkTree())) {
+	if (!(await git.isInsideWorkTree(opts.signal))) {
 		throw new Error(
 			`Not a git repository: ${opts.projectRoot}. Pincer requires a git repo.`,
 		);
@@ -70,6 +71,9 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	const resolved = await resolveHarnesses({
 		selectedId: opts.selectedHarnessId,
 		commands: opts.harnessCommands,
+		projectRoot: opts.projectRoot,
+		env: process.env,
+		signal: opts.signal,
 	});
 	const store = new Store(join(pincerDataDir, "history.db"));
 	const settingsStore = new SettingsStore(settingsDbPath(dataRoot));
@@ -129,6 +133,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 				const emit: Emit = (message) => {
 					ws.send(JSON.stringify(message));
 				};
+				const frameBytes =
+					typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength;
+				if (frameBytes > MAX_CLIENT_FRAME_BYTES) {
+					emit({
+						v: PROTOCOL_VERSION,
+						type: "error",
+						code: "bad_message",
+						message: "Message is too large.",
+					});
+					return;
+				}
 				let parsed: unknown;
 				try {
 					parsed = JSON.parse(typeof raw === "string" ? raw : raw.toString());
@@ -141,13 +156,43 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 					});
 					return;
 				}
-				await dispatch(
-					orchestrator,
-					parsed,
-					opts.projectRoot,
-					settingsStore,
-					emit,
-				);
+				const result = parseClientMessage(parsed);
+				if (!result.ok) {
+					if (result.error === "Unsupported protocol version.") {
+						ws.close(1002, "Unsupported protocol version");
+						return;
+					}
+					emit({
+						v: PROTOCOL_VERSION,
+						type: "error",
+						code: "bad_message",
+						message: result.error,
+					});
+					return;
+				}
+				try {
+					await dispatch(
+						orchestrator,
+						result.value,
+						opts.projectRoot,
+						settingsStore,
+						emit,
+					);
+				} catch (error) {
+					log(`request failed type=${result.value.type}: ${String(error)}`);
+					const conversationId =
+						"conversationId" in result.value
+							? result.value.conversationId
+							: undefined;
+					emit({
+						v: PROTOCOL_VERSION,
+						type: "error",
+						requestType: result.value.type,
+						...(conversationId === undefined ? {} : { conversationId }),
+						code: "internal_error",
+						message: "Request failed.",
+					});
+				}
 			},
 			close(ws: ServerWebSocket) {
 				subscribers.delete(ws);
@@ -173,12 +218,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	};
 }
 
-function readConfig(msg: Record<string, unknown>): ConversationConfig {
-	const c: ConversationConfig = {};
-	if (typeof msg.harnessId === "string") c.harnessId = msg.harnessId;
-	if (typeof msg.model === "string") c.model = msg.model;
-	if (typeof msg.effort === "string") c.effort = msg.effort;
-	return c;
+function readConfig(msg: ConversationConfig): ConversationConfig {
+	return {
+		...(msg.harnessId === undefined ? {} : { harnessId: msg.harnessId }),
+		...(msg.model === undefined ? {} : { model: msg.model }),
+		...(msg.effort === undefined ? {} : { effort: msg.effort }),
+	};
 }
 
 export interface SettingsRepository {
@@ -196,10 +241,9 @@ export interface SettingsRepository {
 }
 
 function canonicalAppRoot(
-	raw: unknown,
+	raw: string,
 	daemonProjectRoot: string,
 ): string | null {
-	if (typeof raw !== "string") return null;
 	try {
 		const projectRoot = realpathSync(daemonProjectRoot);
 		const appRoot = realpathSync(raw);
@@ -216,8 +260,7 @@ function canonicalAppRoot(
 	}
 }
 
-function canonicalAppOrigin(raw: unknown): string | null {
-	if (typeof raw !== "string") return null;
+function canonicalAppOrigin(raw: string): string | null {
 	try {
 		const url = new URL(raw);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
@@ -227,18 +270,17 @@ function canonicalAppOrigin(raw: unknown): string | null {
 	}
 }
 
+type SettingsMessage = Extract<
+	ClientMessage,
+	{ type: "get_overlay_settings" | "update_overlay_settings" }
+>;
+
 export function handleSettingsMessage(
-	raw: Record<string, unknown>,
+	raw: SettingsMessage,
 	daemonProjectRoot: string,
 	settings: SettingsRepository,
 	emit: Emit,
 ): boolean {
-	if (
-		raw.type !== "get_overlay_settings" &&
-		raw.type !== "update_overlay_settings"
-	)
-		return false;
-
 	const appRoot = canonicalAppRoot(raw.appRoot, daemonProjectRoot);
 	if (!appRoot) {
 		emit({
@@ -271,25 +313,9 @@ export function handleSettingsMessage(
 			return true;
 		}
 
-		const hasShortcut = Object.hasOwn(raw, "shortcut");
-		const hasFloatingButton = Object.hasOwn(raw, "showFloatingButton");
-		if (
-			(!hasShortcut && !hasFloatingButton) ||
-			(hasShortcut && !isKeyboardShortcut(raw.shortcut)) ||
-			(hasFloatingButton && typeof raw.showFloatingButton !== "boolean")
-		) {
-			emit({
-				v: PROTOCOL_VERSION,
-				type: "error",
-				code: "bad_message",
-				message: "Invalid overlay settings update.",
-			});
-			return true;
-		}
-
 		const patch: { shortcut?: KeyboardShortcut; showFloatingButton?: boolean } =
 			{};
-		if (isKeyboardShortcut(raw.shortcut)) patch.shortcut = raw.shortcut;
+		if (raw.shortcut) patch.shortcut = raw.shortcut;
 		if (typeof raw.showFloatingButton === "boolean") {
 			patch.showFloatingButton = raw.showFloatingButton;
 		}
@@ -309,83 +335,103 @@ export function handleSettingsMessage(
 	return true;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
+function emitResponse(
+	emit: Emit,
+	response: ServerMessage,
+	requestType: ClientMessageType,
+	conversationId?: string,
+): void {
+	if (response.type !== "error") {
+		emit(response);
+		return;
+	}
+	emit({
+		...response,
+		requestType,
+		conversationId: response.conversationId ?? conversationId,
+	});
 }
 
 async function dispatch(
 	orch: Orchestrator,
-	raw: unknown,
+	msg: ClientMessage,
 	daemonProjectRoot: string,
 	settings: SettingsRepository,
 	emit: Emit,
 ): Promise<void> {
-	if (!isRecord(raw)) {
-		emit({
-			v: PROTOCOL_VERSION,
-			type: "error",
-			code: "bad_message",
-			message: "Expected an object.",
-		});
-		return;
-	}
-	const msg = raw;
-	if (handleSettingsMessage(msg, daemonProjectRoot, settings, emit)) return;
 	switch (msg.type) {
 		case "list_conversations":
 			emit(orch.listConversations());
 			return;
 		case "new_conversation":
-			emit(await orch.newConversation(readConfig(msg)));
+			emitResponse(emit, await orch.newConversation(readConfig(msg)), msg.type);
 			return;
 		case "resume_conversation":
-			emit(orch.resumeConversation(String(msg.conversationId)));
+			emitResponse(
+				emit,
+				orch.resumeConversation(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "set_config":
-			emit(orch.setConfig(String(msg.conversationId), readConfig(msg)));
+			emitResponse(
+				emit,
+				orch.setConfig(msg.conversationId, readConfig(msg)),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "delete_conversation":
-			emit(await orch.deleteConversation(String(msg.conversationId)));
+			emitResponse(
+				emit,
+				await orch.deleteConversation(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "prompt": {
-			const domContext = (msg.domContext as DomContext | undefined) ?? {
-				tag: "unknown",
-				id: null,
-				classes: [],
-				text: null,
-				ancestry: [],
-			};
-			const elements = Array.isArray(msg.elements)
-				? (msg.elements as PromptElement[])
-				: [];
 			const rejection = orch.submitTurn(
-				String(msg.conversationId),
-				String(msg.prompt ?? ""),
-				(msg.source as SourceLocation | null) ?? null,
-				domContext,
-				elements,
+				msg.conversationId,
+				msg.prompt,
+				msg.source,
+				msg.domContext,
+				msg.elements ?? [],
 			);
-			if (rejection) emit(rejection);
+			if (rejection)
+				emitResponse(emit, rejection, msg.type, msg.conversationId);
 			return;
 		}
 		case "cancel":
-			await orch.cancel(String(msg.conversationId));
+			await orch.cancel(msg.conversationId);
 			return;
 		case "revert":
-			emit(await orch.revert(String(msg.conversationId)));
+			emitResponse(
+				emit,
+				await orch.revert(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "accept":
-			emit(await orch.accept(String(msg.conversationId)));
+			emitResponse(
+				emit,
+				await orch.accept(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "discard":
-			emit(await orch.discard(String(msg.conversationId)));
+			emitResponse(
+				emit,
+				await orch.discard(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
-		default:
-			emit({
-				v: PROTOCOL_VERSION,
-				type: "error",
-				code: "bad_message",
-				message: `Unknown message type: ${String(msg.type)}`,
-			});
+		case "get_overlay_settings":
+		case "update_overlay_settings":
+			handleSettingsMessage(msg, daemonProjectRoot, settings, emit);
+			return;
 	}
 }

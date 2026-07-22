@@ -1,22 +1,30 @@
-import type { HarnessEvent, HarnessModel } from "@pincer/core";
-import { stopProcessTree } from "../processTree";
+import type {
+	HarnessCatalogState,
+	HarnessEvent,
+	HarnessModel,
+} from "@pincer/core";
 import type { ProcessTreeHandle } from "../processTree";
+import { stopProcessTree } from "../processTree";
+import { normalizeModels } from "./adapter";
 import type {
 	HarnessDecodeResult,
-	HarnessInvocation,
 	HarnessDefinition,
+	HarnessInvocation,
 	HarnessRunOutcome,
+	HarnessRuntimeContext,
 	HarnessTurnRequest,
 	InstalledHarness,
 	RunningHarnessTurn,
 } from "./types";
 
 const MAX_STDERR_CHARS = 16_384;
+const MAX_NDJSON_RECORD_BYTES = 1_048_576;
+const MAX_CATALOG_CHARS = 1_048_576;
 const MAX_DIAGNOSTICS = 20;
 const PROBE_TIMEOUT_MS = 5_000;
 const CATALOG_TIMEOUT_MS = 10_000;
 
-async function readText(
+async function readTextTail(
 	stream: ReadableStream<Uint8Array>,
 	limit: number,
 ): Promise<string> {
@@ -27,41 +35,73 @@ async function readText(
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			const chunk = decoder.decode(value, { stream: true });
-			if (output.length < limit)
-				output += chunk.slice(0, limit - output.length);
+			output = (output + decoder.decode(value, { stream: true })).slice(-limit);
 		}
-		const tail = decoder.decode();
-		return output.length < limit
-			? output + tail.slice(0, limit - output.length)
-			: output;
+		return (output + decoder.decode()).slice(-limit);
 	} finally {
 		reader.releaseLock();
 	}
 }
 
+function joinBytes(parts: readonly Uint8Array[], length: number): Uint8Array {
+	const joined = new Uint8Array(length);
+	let offset = 0;
+	for (const part of parts) {
+		joined.set(part, offset);
+		offset += part.byteLength;
+	}
+	return joined;
+}
+
 async function readLines(
 	stream: ReadableStream<Uint8Array>,
 	consume: (line: string) => void,
+	onOversized: () => void,
 ): Promise<void> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
-	let pending = "";
+	let parts: Uint8Array[] = [];
+	let length = 0;
+	let oversized = false;
+
+	const append = (part: Uint8Array): void => {
+		if (oversized || part.byteLength === 0) return;
+		if (length + part.byteLength > MAX_NDJSON_RECORD_BYTES) {
+			parts = [];
+			length = 0;
+			oversized = true;
+			return;
+		}
+		parts.push(part);
+		length += part.byteLength;
+	};
+	const finish = (): void => {
+		if (oversized) {
+			onOversized();
+		} else if (length > 0) {
+			const bytes = joinBytes(parts, length);
+			const end = bytes[length - 1] === 13 ? length - 1 : length;
+			consume(decoder.decode(bytes.subarray(0, end)));
+		}
+		parts = [];
+		length = 0;
+		oversized = false;
+	};
+
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			pending += decoder.decode(value, { stream: true });
-			let newline = pending.indexOf("\n");
-			while (newline >= 0) {
-				const line = pending.slice(0, newline).replace(/\r$/, "");
-				pending = pending.slice(newline + 1);
-				consume(line);
-				newline = pending.indexOf("\n");
+			let start = 0;
+			for (let index = 0; index < value.byteLength; index += 1) {
+				if (value[index] !== 10) continue;
+				append(value.subarray(start, index));
+				finish();
+				start = index + 1;
 			}
+			append(value.subarray(start));
 		}
-		pending += decoder.decode();
-		if (pending.length > 0) consume(pending.replace(/\r$/, ""));
+		if (oversized || length > 0) finish();
 	} finally {
 		reader.releaseLock();
 	}
@@ -69,40 +109,122 @@ async function readLines(
 
 async function runCatalogInvocation(
 	invocation: HarnessInvocation,
+	context: HarnessRuntimeContext,
 ): Promise<string> {
 	const proc = Bun.spawn({
 		cmd: invocation.argv,
-		env: process.env,
+		cwd: context.projectRoot,
+		env: context.env,
 		stdin: invocation.stdin === undefined ? "ignore" : "pipe",
 		stdout: "pipe",
 		stderr: "ignore",
-		signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
+		detached: process.platform !== "win32",
 	});
-	if (invocation.stdin !== undefined && proc.stdin) {
-		proc.stdin.write(invocation.stdin);
-		proc.stdin.end();
+	let timedOut = false;
+	let cancellation: Promise<void> | null = null;
+	const stop = (): void => {
+		cancellation ??= stopProcessTree(proc);
+	};
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		stop();
+	}, CATALOG_TIMEOUT_MS);
+	const abort = (): void => stop();
+	context.signal?.addEventListener("abort", abort, { once: true });
+	try {
+		throwIfInstallationAborted(context.signal);
+		const input = (async (): Promise<void> => {
+			if (invocation.stdin === undefined || !proc.stdin) return;
+			try {
+				await proc.stdin.write(invocation.stdin);
+				await proc.stdin.end();
+			} catch (error) {
+				if (!isClosedPipe(error)) throw error;
+			}
+		})();
+		const exit = proc.exited.then(async (exitCode) => {
+			cancellation ??= stopProcessTree(proc);
+			await cancellation;
+			return exitCode;
+		});
+		const [exitCode, stdout] = await Promise.all([
+			exit,
+			readTextTail(proc.stdout, MAX_CATALOG_CHARS),
+			input,
+		]);
+		if (cancellation) await cancellation;
+		throwIfInstallationAborted(context.signal);
+		if (timedOut) throw new Error("Harness catalog command timed out");
+		if (exitCode !== 0) throw new Error("Harness catalog command failed");
+		return stdout;
+	} finally {
+		clearTimeout(timeout);
+		context.signal?.removeEventListener("abort", abort);
+		cancellation ??= stopProcessTree(proc);
+		await cancellation;
 	}
-	const stdout = await readText(proc.stdout, 1_048_576);
-	if ((await proc.exited) !== 0)
-		throw new Error("Harness catalog command failed");
-	return stdout;
+}
+
+function diagnostic(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function throwIfInstallationAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw new Error("Harness installation aborted");
+}
+
+function isClosedPipe(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error.code === "EPIPE" || error.code === "ECONNRESET")
+	);
 }
 
 export class HarnessRunner {
 	static async detect(
 		definition: HarnessDefinition,
 		command: string[],
+		context: HarnessRuntimeContext = {
+			projectRoot: process.cwd(),
+			env: process.env,
+		},
 	): Promise<boolean> {
 		try {
+			throwIfInstallationAborted(context.signal);
 			const proc = Bun.spawn({
-				env: process.env,
+				cwd: context.projectRoot,
+				env: context.env,
 				cmd: [...command, ...definition.probeArgs],
 				stdout: "ignore",
 				stderr: "ignore",
-				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+				detached: process.platform !== "win32",
 			});
-			return (await proc.exited) === 0;
-		} catch {
+			let timedOut = false;
+			let cancellation: Promise<void> | null = null;
+			const stop = (): void => {
+				cancellation ??= stopProcessTree(proc);
+			};
+			const timeout = setTimeout(() => {
+				timedOut = true;
+				stop();
+			}, PROBE_TIMEOUT_MS);
+			const abort = (): void => stop();
+			context.signal?.addEventListener("abort", abort, { once: true });
+			try {
+				const exitCode = await proc.exited;
+				if (cancellation) await cancellation;
+				throwIfInstallationAborted(context.signal);
+				return !timedOut && exitCode === 0;
+			} finally {
+				clearTimeout(timeout);
+				context.signal?.removeEventListener("abort", abort);
+				cancellation ??= stopProcessTree(proc);
+				await cancellation;
+			}
+		} catch (error) {
+			if (context.signal?.aborted) throw error;
 			return false;
 		}
 	}
@@ -110,44 +232,88 @@ export class HarnessRunner {
 	static async discoverModels(
 		definition: HarnessDefinition,
 		command: string[],
+		context: HarnessRuntimeContext = {
+			projectRoot: process.cwd(),
+			env: process.env,
+		},
 	): Promise<HarnessModel[]> {
 		const source = definition.catalog;
-		let models: HarnessModel[];
-		try {
-			const output = await runCatalogInvocation(source.models.build(command));
-			models = source.models.decode(output);
-		} catch {
-			return [];
-		}
-
+		throwIfInstallationAborted(context.signal);
+		if (!source) return [];
+		const output = await runCatalogInvocation(
+			source.models.build(command),
+			context,
+		);
+		const models = source.models.decode(output);
 		const effortSource = source.efforts;
-		if (!effortSource) return models;
-		return Promise.all(
+		if (!effortSource) return normalizeModels(models);
+		const effortResults = await Promise.allSettled(
 			models.map(async (model) => {
 				try {
-					const output = await runCatalogInvocation(
+					const effortOutput = await runCatalogInvocation(
 						effortSource.build(command, model),
+						context,
 					);
-					return { ...model, efforts: effortSource.decode(output) };
-				} catch {
+					return { ...model, efforts: effortSource.decode(effortOutput) };
+				} catch (error) {
+					if (context.signal?.aborted) throw error;
 					return { ...model, efforts: [] };
 				}
 			}),
 		);
+		throwIfInstallationAborted(context.signal);
+		const rejected = effortResults.find(
+			(result): result is PromiseRejectedResult => result.status === "rejected",
+		);
+		if (rejected) throw rejected.reason;
+		const withEfforts = effortResults.flatMap((result) =>
+			result.status === "fulfilled" ? [result.value] : [],
+		);
+		return normalizeModels(withEfforts);
 	}
 
 	static async install(
 		definition: HarnessDefinition,
 		command: string[],
+		context: HarnessRuntimeContext = {
+			projectRoot: process.cwd(),
+			env: process.env,
+		},
 	): Promise<InstalledHarness> {
-		const commandDetected = await HarnessRunner.detect(definition, command);
-		const models = commandDetected
-			? await HarnessRunner.discoverModels(definition, command)
-			: [];
+		throwIfInstallationAborted(context.signal);
+		const detected = await HarnessRunner.detect(definition, command, context);
+		let catalog: HarnessCatalogState;
+		let models: HarnessModel[] = [];
+		if (!definition.catalog) {
+			catalog = { status: "unsupported", diagnostics: [] };
+		} else if (!detected) {
+			catalog = {
+				status: "failed",
+				diagnostics: ["Harness CLI probe failed; catalog was not queried"],
+			};
+		} else {
+			try {
+				models = await HarnessRunner.discoverModels(
+					definition,
+					command,
+					context,
+				);
+				catalog = { status: "ready", diagnostics: [] };
+			} catch (error) {
+				if (context.signal?.aborted) throw error;
+				catalog = {
+					status: "failed",
+					diagnostics: [`Harness catalog failed: ${diagnostic(error)}`],
+				};
+			}
+		}
+		throwIfInstallationAborted(context.signal);
 		return {
 			definition,
 			command,
-			detected: commandDetected && models.length > 0,
+			runtime: { projectRoot: context.projectRoot, env: { ...context.env } },
+			detected,
+			catalog,
 			models,
 		};
 	}
@@ -168,6 +334,7 @@ export class HarnessRunner {
 			let terminalCount = 0;
 			let terminalSuccess = false;
 			let terminalSummary = "";
+			let eventFailure: unknown = null;
 
 			const diagnose = (message: string): void => {
 				if (diagnostics.length < MAX_DIAGNOSTICS)
@@ -206,7 +373,12 @@ export class HarnessRunner {
 						terminalSuccess = event.success;
 						terminalSummary = event.summary ?? "";
 					}
-					onEvent(event);
+					try {
+						onEvent(event);
+					} catch (error) {
+						eventFailure ??= error;
+						if (processHandle) cancellation ??= stopProcessTree(processHandle);
+					}
 				}
 			};
 
@@ -218,27 +390,54 @@ export class HarnessRunner {
 				const proc = Bun.spawn({
 					cmd: invocation.argv,
 					cwd: request.projectRoot,
-					env: process.env,
+					env: installed.runtime?.env ?? process.env,
 					stdin: invocation.stdin === undefined ? "ignore" : "pipe",
 					stdout: "pipe",
 					stderr: "pipe",
 					detached: process.platform !== "win32",
 				});
 				processHandle = proc;
+				if (cancelled) cancellation ??= stopProcessTree(proc);
 
-				if (invocation.stdin !== undefined && proc.stdin) {
-					proc.stdin.write(invocation.stdin);
-					proc.stdin.end();
-				}
-
-				const stderrTask = readText(proc.stderr, MAX_STDERR_CHARS).then(
+				const stderrTask = readTextTail(proc.stderr, MAX_STDERR_CHARS).then(
 					(text) => {
 						stderr = text;
 					},
 				);
-				const stdoutTask = readLines(proc.stdout, consume);
-				const exitCode = await proc.exited;
-				await Promise.all([stdoutTask, stderrTask]);
+				const stdoutTask = readLines(proc.stdout, consume, () =>
+					diagnose(
+						`Harness NDJSON record exceeded ${MAX_NDJSON_RECORD_BYTES} bytes`,
+					),
+				);
+				const inputTask = (async (): Promise<void> => {
+					if (invocation.stdin === undefined || !proc.stdin) return;
+					try {
+						await proc.stdin.write(invocation.stdin);
+						await proc.stdin.end();
+					} catch (error) {
+						if (!isClosedPipe(error)) throw error;
+					}
+				})();
+				const exitTask = proc.exited.then(async (exitCode) => {
+					cancellation ??= stopProcessTree(proc);
+					await cancellation;
+					return exitCode;
+				});
+				const settled = await Promise.allSettled([
+					exitTask,
+					stdoutTask,
+					stderrTask,
+					inputTask,
+				]);
+				const rejected = settled.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected",
+				);
+				if (rejected) throw rejected.reason;
+				if (eventFailure) throw eventFailure;
+				const exitResult = settled[0];
+				if (exitResult.status !== "fulfilled") throw exitResult.reason;
+				const exitCode = exitResult.value;
 
 				if (cancelled) {
 					return {
@@ -299,6 +498,11 @@ export class HarnessRunner {
 					diagnostics,
 					stderr,
 				};
+			} finally {
+				if (processHandle) {
+					cancellation ??= stopProcessTree(processHandle);
+					await cancellation;
+				}
 			}
 		})();
 
@@ -306,7 +510,7 @@ export class HarnessRunner {
 			outcome,
 			cancel: async () => {
 				cancelled = true;
-				if (processHandle?.exitCode === null) {
+				if (processHandle) {
 					cancellation ??= stopProcessTree(processHandle);
 					await cancellation;
 				}

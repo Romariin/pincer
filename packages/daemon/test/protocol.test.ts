@@ -2,7 +2,11 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { PROTOCOL_VERSION, type ConversationConfig } from "@pincer/core";
+import {
+	PROTOCOL_VERSION,
+	type ClientMessage,
+	type ConversationConfig,
+} from "@pincer/core";
 import { createHarness, type Harness } from "./harness";
 
 const V = PROTOCOL_VERSION;
@@ -68,6 +72,56 @@ function rows(
 		db.close();
 	}
 }
+
+test("malformed WebSocket messages are rejected before dispatch", async () => {
+	harness = await createHarness();
+	await harness.next("welcome");
+	const malformed: unknown[] = [
+		{ v: V, type: "new_conversation", harnessId: 12 },
+		{ v: V, type: "resume_conversation", conversationId: null },
+		{
+			v: V,
+			type: "prompt",
+			conversationId: "never-created",
+			prompt: "run despite malformed context",
+			source: { path: "src/App.tsx", line: "2", column: 0 },
+			domContext: harness.domContext,
+		},
+		{
+			v: V,
+			type: "prompt",
+			conversationId: "never-created",
+			prompt: "x".repeat(1_100_000),
+			source: null,
+			domContext: harness.domContext,
+		},
+	];
+
+	for (const message of malformed) {
+		harness.send(message as ClientMessage);
+		expect(await harness.next("error")).toMatchObject({ code: "bad_message" });
+	}
+	harness.send({ v: V, type: "list_conversations" });
+	expect((await harness.next("conversations")).items).toEqual([]);
+	expect(harness.invocations()).toEqual([]);
+});
+
+test("an incompatible client protocol closes the socket", async () => {
+	harness = await createHarness();
+	await harness.next("welcome");
+	const socket = new WebSocket(`ws://127.0.0.1:${harness.port}`);
+	await new Promise<void>((resolve, reject) => {
+		socket.addEventListener("open", () => resolve(), { once: true });
+		socket.addEventListener("error", () => reject(new Error("WebSocket failed")), {
+			once: true,
+		});
+	});
+	const closed = new Promise<CloseEvent>((resolve) =>
+		socket.addEventListener("close", resolve, { once: true }),
+	);
+	socket.send(JSON.stringify({ v: V + 1, type: "list_conversations" }));
+	expect((await closed).code).toBe(1002);
+});
 
 test("an explicit unknown or unavailable Harness blocks instead of falling back to detected OMP", async () => {
 	harness = await createHarness({ selectedHarnessId: "claude-code" });

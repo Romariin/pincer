@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { codexHarness } from "../src/harnesses/codex";
 
-const catalog = codexHarness.catalog.models;
+const catalog = codexHarness.catalog?.models;
+if (!catalog) throw new Error("Codex catalog discovery is not configured");
 
 test("Codex catalog invokes the CLI debug models command without replacing wrapper argv", () => {
 	const command = ["bun", "/tmp/fake codex.ts", "--wrapper-option"];

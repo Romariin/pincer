@@ -1,5 +1,5 @@
-import type { SourceLocation } from "./source";
 import type { DomContext } from "./dom";
+import type { SourceLocation } from "./source";
 
 /** A selectable model exposed by a Harness model catalog. */
 export interface HarnessModel {
@@ -21,10 +21,23 @@ export interface HarnessDisplay {
 	c2: string;
 }
 
+export interface HarnessCapabilities {
+	model: boolean;
+	effort: boolean;
+	resume: boolean;
+}
+
+export interface HarnessCatalogState {
+	status: "ready" | "unsupported" | "failed";
+	diagnostics: string[];
+}
+
 /** Browser-safe startup projection of a daemon-private HarnessDefinition. */
 export interface HarnessDescriptor extends HarnessDisplay {
 	id: string;
 	detected: boolean;
+	capabilities: HarnessCapabilities;
+	catalog: HarnessCatalogState;
 	models: HarnessModel[];
 }
 
@@ -57,11 +70,18 @@ export type HarnessEvent =
 	| { kind: "result"; success: boolean; summary?: string };
 
 export type TurnState = "idle" | "queued" | "running";
+export type ConversationStatus = "active" | "accepted" | "discarded";
+export type TurnStatus =
+	| "running"
+	| "complete"
+	| "error"
+	| "cancelled"
+	| "reverted";
 
 export interface ConversationSummary {
 	id: string;
 	branch: string;
-	status: string;
+	status: ConversationStatus;
 	createdAt: number;
 	updatedAt: number;
 	turnCount: number;
@@ -80,7 +100,7 @@ export interface TurnSummary {
 	seq: number;
 	prompt: string;
 	checkpoint: string | null;
-	status: string;
+	status: TurnStatus;
 	createdAt: number;
 	/** Accumulated assistant text, so a resumed conversation can replay it. */
 	output: string;
@@ -313,10 +333,13 @@ export type ServerMessage =
 	| {
 			v: number;
 			type: "error";
+			conversationId?: string;
+			requestType?: ClientMessageType;
 			code?:
 				| "merge_conflict"
 				| "unknown_conversation"
 				| "bad_message"
+				| "internal_error"
 				| "settings_unavailable"
 				| "unknown_harness"
 				| "harness_unavailable";

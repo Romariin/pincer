@@ -209,43 +209,69 @@ if (args.harnessCommand) {
 }
 const proxyMode = isDev || args.proxyRequested || args.target !== undefined;
 
-if (proxyMode) {
-	if (args.command.length === 0 && !args.target) {
-		console.error(
-			"usage: pincer [options] -- <command>   (e.g. pincer -- bun run dev)",
+const startupAbort = new AbortController();
+let startupExitCode = 130;
+const abortStartup = (exitCode: number): void => {
+	startupExitCode = exitCode;
+	startupAbort.abort();
+};
+const abortStartupFromSigint = (): void => abortStartup(130);
+const abortStartupFromSigterm = (): void => abortStartup(143);
+process.once("SIGINT", abortStartupFromSigint);
+process.once("SIGTERM", abortStartupFromSigterm);
+
+try {
+	if (proxyMode) {
+		if (args.command.length === 0 && !args.target) {
+			console.error(
+				"usage: pincer [options] -- <command>   (e.g. pincer -- bun run dev)",
+			);
+			process.exit(1);
+		}
+		// Proxy mode owns the generated overlay asset. Loading it here keeps the
+		// daemon-only CLI independent of the overlay watcher's rebuild window.
+		const { runDev } = await import("./dev");
+		await runDev({
+			projectRoot,
+			daemonPort: port,
+			proxyPort: args.proxyPort ?? fileConfig.proxyPort ?? DEFAULT_PROXY_PORT,
+			command: args.command,
+			target: args.target,
+			selectedHarnessId,
+			harnessCommands,
+			log,
+			signal: startupAbort.signal,
+			...(process.env.PINCER_OVERLAY_BUNDLE === undefined
+				? {}
+				: { overlayBundle: process.env.PINCER_OVERLAY_BUNDLE }),
+		});
+	} else {
+		const daemon = await startDaemon({
+			projectRoot,
+			port,
+			selectedHarnessId,
+			harnessCommands,
+			log,
+			signal: startupAbort.signal,
+		});
+		process.removeListener("SIGINT", abortStartupFromSigint);
+		process.removeListener("SIGTERM", abortStartupFromSigterm);
+
+		console.log(
+			`pincer listening on ws://127.0.0.1:${daemon.port}, project ${projectRoot}, Harness ${daemon.orchestrator.defaultHarnessId ?? "none"}`,
 		);
-		process.exit(1);
+
+		const shutdown = async (): Promise<never> => {
+			await daemon.stop();
+			process.exit(0);
+		};
+		process.once("SIGINT", () => void shutdown());
+		process.once("SIGTERM", () => void shutdown());
 	}
-	// Proxy mode owns the generated overlay asset. Loading it here keeps the
-	// daemon-only CLI independent of the overlay watcher's rebuild window.
-	const { runDev } = await import("./dev");
-	await runDev({
-		projectRoot,
-		daemonPort: port,
-		proxyPort: args.proxyPort ?? fileConfig.proxyPort ?? DEFAULT_PROXY_PORT,
-		command: args.command,
-		target: args.target,
-		selectedHarnessId,
-		harnessCommands,
-		log,
-	});
-} else {
-	const daemon = await startDaemon({
-		projectRoot,
-		port,
-		selectedHarnessId,
-		harnessCommands,
-		log,
-	});
-
-	console.log(
-		`pincer listening on ws://127.0.0.1:${daemon.port}, project ${projectRoot}, Harness ${daemon.orchestrator.defaultHarnessId ?? "none"}`,
-	);
-
-	const shutdown = async (): Promise<never> => {
-		await daemon.stop();
-		process.exit(0);
-	};
-	process.once("SIGINT", () => void shutdown());
-	process.once("SIGTERM", () => void shutdown());
+} catch (error) {
+	if (!startupAbort.signal.aborted) throw error;
+	process.exitCode = startupExitCode;
+} finally {
+	process.removeListener("SIGINT", abortStartupFromSigint);
+	process.removeListener("SIGTERM", abortStartupFromSigterm);
 }

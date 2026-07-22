@@ -1,17 +1,8 @@
 import { join } from "node:path";
 import type { HarnessEvent, HarnessModel } from "@pincer/core";
+import { asRecord as record, decodedEvents as events } from "./adapter";
 import { composePrompt } from "./prompt";
-import type { HarnessDecodeResult, HarnessDefinition } from "./types";
-
-function record(value: unknown): Record<string, unknown> | null {
-	return value !== null && typeof value === "object" && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
-
-function events(items: HarnessEvent[]): HarnessDecodeResult {
-	return { kind: "events", events: items };
-}
+import type { HarnessDefinition } from "./types";
 
 export const ompHarness: HarnessDefinition = {
 	id: "omp",
@@ -22,6 +13,7 @@ export const ompHarness: HarnessDefinition = {
 		c2: "#7a5fd0",
 		icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ed4abf"/><stop offset=".5" stop-color="#9b4dff"/><stop offset="1" stop-color="#5ad8e6"/></linearGradient></defs><path fill="url(#g)" d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z"/></svg>',
 	},
+	capabilities: { model: true, effort: true, resume: true },
 	defaultCommand: ["omp"],
 	probeArgs: ["--version"],
 	catalog: {

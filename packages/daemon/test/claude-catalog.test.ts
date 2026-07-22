@@ -133,8 +133,8 @@ test.each([
 		name: "a success response with malformed models",
 		output: controlResponse("not an array"),
 	},
-])("Claude catalog returns no models for $name", ({ output }) => {
-	expect(catalog().models.decode(output)).toEqual([]);
+])("Claude catalog rejects $name", ({ output }) => {
+	expect(() => catalog().models.decode(output)).toThrow();
 });
 
 test("Claude turn invocation preserves opaque model and effort selections", () => {

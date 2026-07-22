@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { PROTOCOL_VERSION } from "@pincer/core";
-import type { ClientMessage, ServerMessage } from "@pincer/core";
+import { parseServerMessage, type ClientMessage } from "@pincer/core";
 import { usePincerStore } from "./store";
+import { PincerClient } from "./transport";
 
 const MAX_BACKOFF = 30_000;
 
@@ -38,6 +38,7 @@ export function useSocket(): void {
 		const send = (msg: ClientMessage): void => {
 			if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 		};
+		const client = new PincerClient(send);
 		setSend(send);
 
 		const scheduleReconnect = (): void => {
@@ -56,39 +57,60 @@ export function useSocket(): void {
 				return;
 			}
 			ws = socket;
+			let welcomed = false;
+			let reconnectAllowed = true;
 			socket.addEventListener("open", () => {
-				backoff = 500;
-				setConnected(true);
 				prepareSettings(appRoot, appOrigin, identityError);
-				send({ v: PROTOCOL_VERSION, type: "list_conversations" });
-				const current = usePincerStore.getState();
-				if (current.view === "chat" && current.conversationId) {
-					send({
-						v: PROTOCOL_VERSION,
-						type: "resume_conversation",
-						conversationId: current.conversationId,
-					});
-				}
-				if (appRoot && appOrigin) {
-					send({
-						v: PROTOCOL_VERSION,
-						type: "get_overlay_settings",
-						appRoot,
-						appOrigin,
-					});
-				}
 			});
 			socket.addEventListener("message", (ev: MessageEvent) => {
+				let parsed: ReturnType<typeof parseServerMessage>;
 				try {
-					applyServerMessage(JSON.parse(String(ev.data)) as ServerMessage);
+					parsed = parseServerMessage(JSON.parse(String(ev.data)));
 				} catch {
-					/* ignore malformed frames */
+					console.error("Rejected daemon frame: invalid JSON");
+					reconnectAllowed = false;
+					socket.close(1002, "Invalid daemon frame");
+					return;
 				}
+				if (!parsed.ok) {
+					console.error(`Rejected daemon frame: ${parsed.error}`);
+					reconnectAllowed = false;
+					socket.close(1002, "Invalid daemon frame");
+					return;
+				}
+				if (!welcomed) {
+					if (parsed.value.type !== "welcome") {
+						console.error("Rejected daemon frame: welcome required");
+						reconnectAllowed = false;
+						socket.close(1002, "Welcome required");
+						return;
+					}
+					welcomed = true;
+					backoff = 500;
+					setConnected(true);
+					applyServerMessage(parsed.value);
+					client.listConversations();
+					const current = usePincerStore.getState();
+					if (current.view === "chat" && current.conversationId) {
+						client.resumeConversation(current.conversationId);
+					}
+					if (appRoot && appOrigin) {
+						client.getOverlaySettings(appRoot, appOrigin);
+					}
+					return;
+				}
+				if (parsed.value.type === "welcome") {
+					console.error("Rejected daemon frame: duplicate welcome");
+					reconnectAllowed = false;
+					socket.close(1002, "Duplicate welcome");
+					return;
+				}
+				applyServerMessage(parsed.value);
 			});
 			socket.addEventListener("close", () => {
 				ws = null;
 				setConnected(false);
-				scheduleReconnect();
+				if (reconnectAllowed) scheduleReconnect();
 			});
 			socket.addEventListener("error", () => socket.close());
 		};

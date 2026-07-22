@@ -1,5 +1,7 @@
 import type {
 	DomContext,
+	HarnessCapabilities,
+	HarnessCatalogState,
 	HarnessDisplay,
 	HarnessEvent,
 	HarnessModel,
@@ -49,9 +51,10 @@ export interface HarnessCatalogSource {
 export interface HarnessDefinition {
 	readonly id: string;
 	readonly display: HarnessDisplay;
+	readonly capabilities: HarnessCapabilities;
 	readonly defaultCommand: readonly string[];
 	readonly probeArgs: readonly string[];
-	readonly catalog: HarnessCatalogSource;
+	readonly catalog?: HarnessCatalogSource;
 	buildTurn(request: HarnessTurnRequest, command: string[]): HarnessInvocation;
 	decodeRecord(record: unknown): HarnessDecodeResult;
 }
@@ -59,8 +62,16 @@ export interface HarnessDefinition {
 export interface InstalledHarness {
 	definition: HarnessDefinition;
 	command: string[];
+	runtime?: HarnessRuntimeContext;
 	detected: boolean;
+	catalog: HarnessCatalogState;
 	models: HarnessModel[];
+}
+
+export interface HarnessRuntimeContext {
+	projectRoot: string;
+	env: NodeJS.ProcessEnv;
+	signal?: AbortSignal;
 }
 
 export interface HarnessRunOutcome {

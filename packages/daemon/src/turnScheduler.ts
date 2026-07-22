@@ -1,18 +1,15 @@
 import {
-	PROTOCOL_VERSION,
 	type DomContext,
 	type HarnessEvent,
 	type HarnessSelection,
 	type LiveTurnSnapshot,
+	PROTOCOL_VERSION,
 	type PromptElement,
 	type ServerMessage,
 	type SourceLocation,
 	type TurnState,
 } from "@pincer/core";
-
-const MAX_LIVE_TEXT_CHARS = 256_000;
-const MAX_LIVE_BLOCKS = 200;
-const TRUNCATION_MARKER = "\n\n[Live output truncated]";
+import { LiveTurnBuffer } from "./liveTurnBuffer";
 
 export interface TurnSubmission {
 	conversationId: string;
@@ -38,10 +35,9 @@ export type TurnExecutor = (
 
 interface ScheduledTurn {
 	submission: TurnSubmission;
-	live: LiveTurnSnapshot;
+	buffer: LiveTurnBuffer;
 	cancel: (() => Promise<void>) | null;
 	cancelRequested: boolean;
-	truncated: boolean;
 	finished: Promise<void>;
 	finish(): void;
 }
@@ -54,6 +50,11 @@ export class TurnScheduler {
 	private readonly persistQueuedCancellation: (
 		submission: TurnSubmission,
 	) => number;
+	private readonly persistUnexpectedError: (
+		submission: TurnSubmission,
+		snapshot: LiveTurnSnapshot,
+		message: string,
+	) => { turnId: number; seq: number };
 	private readonly queue: ScheduledTurn[] = [];
 	private active: ScheduledTurn | null = null;
 	private stopping = false;
@@ -62,11 +63,17 @@ export class TurnScheduler {
 		publish: (message: ServerMessage) => void;
 		execute: TurnExecutor;
 		persistQueuedCancellation: (submission: TurnSubmission) => number;
+		persistUnexpectedError: (
+			submission: TurnSubmission,
+			snapshot: LiveTurnSnapshot,
+			message: string,
+		) => { turnId: number; seq: number };
 		onStateChanged: () => void;
 	}) {
 		this.publish = options.publish;
 		this.execute = options.execute;
 		this.persistQueuedCancellation = options.persistQueuedCancellation;
+		this.persistUnexpectedError = options.persistUnexpectedError;
 		this.onStateChanged = options.onStateChanged;
 	}
 
@@ -80,24 +87,21 @@ export class TurnScheduler {
 		});
 		const scheduled: ScheduledTurn = {
 			submission,
-			live: {
+			buffer: new LiveTurnBuffer({
 				conversationId: submission.conversationId,
-				turnId: null,
-				seq: null,
-				state: "queued",
-				queuePosition: this.queue.length + 1,
 				prompt: submission.prompt,
-				blocks: [],
-				selection: { ...submission.selection },
-			},
+				selection: submission.selection,
+				queuePosition:
+					this.queue.length +
+					(this.active?.buffer.snapshot().state === "queued" ? 2 : 1),
+			}),
 			cancel: null,
 			cancelRequested: false,
-			truncated: false,
 			finished,
 			finish,
 		};
 		this.queue.push(scheduled);
-		const snapshot = structuredClone(scheduled.live);
+		const snapshot = scheduled.buffer.snapshot();
 		this.publish({
 			v: PROTOCOL_VERSION,
 			type: "turn_queued",
@@ -124,15 +128,18 @@ export class TurnScheduler {
 	} {
 		if (this.active?.submission.conversationId === conversationId) {
 			return {
-				state: this.active.live.state,
-				queuePosition: this.active.live.queuePosition,
+				state: this.active.buffer.snapshot().state,
+				queuePosition: this.active.buffer.snapshot().queuePosition,
 			};
 		}
 		const queued = this.queue.find(
 			(scheduled) => scheduled.submission.conversationId === conversationId,
 		);
 		return queued
-			? { state: "queued", queuePosition: queued.live.queuePosition }
+			? {
+					state: "queued",
+					queuePosition: queued.buffer.snapshot().queuePosition,
+				}
 			: { state: "idle", queuePosition: null };
 	}
 
@@ -144,7 +151,7 @@ export class TurnScheduler {
 						(candidate) =>
 							candidate.submission.conversationId === conversationId,
 					);
-		return scheduled ? structuredClone(scheduled.live) : null;
+		return scheduled ? scheduled.buffer.snapshot() : null;
 	}
 
 	async cancel(conversationId: string): Promise<boolean> {
@@ -203,7 +210,6 @@ export class TurnScheduler {
 		const scheduled = this.queue.shift();
 		if (!scheduled) return;
 		this.active = scheduled;
-		scheduled.live.queuePosition = null;
 		this.refreshQueuePositions();
 		this.onStateChanged();
 
@@ -212,10 +218,9 @@ export class TurnScheduler {
 				return scheduled.cancelRequested;
 			},
 			started: (turnId, seq) => {
-				scheduled.live.turnId = turnId;
-				scheduled.live.seq = seq;
-				scheduled.live.state = "running";
-				const liveTurn = structuredClone(scheduled.live);
+				scheduled.buffer.start(turnId, seq);
+				this.refreshQueuePositions();
+				const liveTurn = scheduled.buffer.snapshot();
 				this.publish({
 					v: PROTOCOL_VERSION,
 					type: "turn_started",
@@ -231,17 +236,25 @@ export class TurnScheduler {
 				if (scheduled.cancelRequested) void cancel();
 			},
 			event: (event) => this.recordEvent(scheduled, event),
-			snapshot: () => structuredClone(scheduled.live),
+			snapshot: () => scheduled.buffer.snapshot(),
 		};
 
 		void this.execute(scheduled.submission, controls)
 			.catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				const persisted = this.persistUnexpectedError(
+					scheduled.submission,
+					scheduled.buffer.snapshot(),
+					message,
+				);
+				if (scheduled.buffer.snapshot().turnId === null)
+					controls.started(persisted.turnId, persisted.seq);
 				this.publish({
 					v: PROTOCOL_VERSION,
 					type: "turn_error",
 					conversationId: scheduled.submission.conversationId,
-					turnId: scheduled.live.turnId,
-					message: error instanceof Error ? error.message : String(error),
+					turnId: persisted.turnId,
+					message,
 				});
 			})
 			.finally(() => {
@@ -253,75 +266,31 @@ export class TurnScheduler {
 	}
 
 	private refreshQueuePositions(): void {
+		const offset = this.active?.buffer.snapshot().state === "queued" ? 1 : 0;
 		for (let index = 0; index < this.queue.length; index += 1) {
 			const scheduled = this.queue[index];
 			if (!scheduled) continue;
-			const queuePosition = index + 1;
-			if (scheduled.live.queuePosition === queuePosition) continue;
-			scheduled.live.queuePosition = queuePosition;
+			const queuePosition = index + offset + 1;
+			if (scheduled.buffer.snapshot().queuePosition === queuePosition) continue;
+			scheduled.buffer.setQueuePosition(queuePosition);
 			this.publish({
 				v: PROTOCOL_VERSION,
 				type: "turn_queued",
 				conversationId: scheduled.submission.conversationId,
-				liveTurn: structuredClone(scheduled.live),
+				liveTurn: scheduled.buffer.snapshot(),
 			});
 		}
 	}
 
 	private recordEvent(scheduled: ScheduledTurn, event: HarnessEvent): void {
-		if (event.kind === "session" || event.kind === "result") return;
-
-		let published = event;
-		if (event.kind === "text") {
-			if (scheduled.truncated) return;
-			const existingText = scheduled.live.blocks.reduce(
-				(total, block) => total + (block.t === "md" ? block.text.length : 0),
-				0,
-			);
-			const available = Math.max(0, MAX_LIVE_TEXT_CHARS - existingText);
-			const text =
-				event.text.length > available
-					? event.text.slice(0, available) + TRUNCATION_MARKER
-					: event.text;
-			if (event.text.length > available) scheduled.truncated = true;
-			published = { kind: "text", text };
-			const tail = scheduled.live.blocks[scheduled.live.blocks.length - 1];
-			if (tail?.t === "md") tail.text += text;
-			else scheduled.live.blocks.push({ t: "md", text });
-		} else if (event.kind === "tool") {
-			if (scheduled.live.blocks.length >= MAX_LIVE_BLOCKS) {
-				if (scheduled.truncated) return;
-				published = { kind: "text", text: TRUNCATION_MARKER };
-				scheduled.live.blocks.push({ t: "md", text: TRUNCATION_MARKER });
-				scheduled.truncated = true;
-			} else {
-				scheduled.live.blocks.push({
-					t: "tool",
-					name: event.name,
-					detail: event.detail,
-				});
-			}
-		} else if (event.kind === "diff") {
-			if (scheduled.live.blocks.length >= MAX_LIVE_BLOCKS) {
-				if (scheduled.truncated) return;
-				published = { kind: "text", text: TRUNCATION_MARKER };
-				scheduled.live.blocks.push({ t: "md", text: TRUNCATION_MARKER });
-				scheduled.truncated = true;
-			} else {
-				scheduled.live.blocks.push({
-					t: "diff",
-					file: event.file,
-					hunks: event.hunks,
-				});
-			}
-		}
-
-		if (scheduled.live.turnId === null) return;
+		const published = scheduled.buffer.record(event);
+		const snapshot = scheduled.buffer.snapshot();
+		if (!published || snapshot.turnId === null) return;
 		this.publish({
 			v: PROTOCOL_VERSION,
 			type: "harness_output",
 			conversationId: scheduled.submission.conversationId,
-			turnId: scheduled.live.turnId,
+			turnId: snapshot.turnId,
 			event: published,
 		});
 	}

@@ -13,6 +13,6 @@ export default defineConfig({
     emptyOutDir: true,
     cssCodeSplit: false,
     minify: true,
-    rollupOptions: { output: { inlineDynamicImports: true } },
+    rollupOptions: { output: { codeSplitting: false } },
   },
 });
