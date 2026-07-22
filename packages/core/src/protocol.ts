@@ -70,11 +70,18 @@ export type HarnessEvent =
 	| { kind: "result"; success: boolean; summary?: string };
 
 export type TurnState = "idle" | "queued" | "running";
+export type ConversationStatus = "active" | "accepted" | "discarded";
+export type TurnStatus =
+	| "running"
+	| "complete"
+	| "error"
+	| "cancelled"
+	| "reverted";
 
 export interface ConversationSummary {
 	id: string;
 	branch: string;
-	status: string;
+	status: ConversationStatus;
 	createdAt: number;
 	updatedAt: number;
 	turnCount: number;
@@ -93,7 +100,7 @@ export interface TurnSummary {
 	seq: number;
 	prompt: string;
 	checkpoint: string | null;
-	status: string;
+	status: TurnStatus;
 	createdAt: number;
 	/** Accumulated assistant text, so a resumed conversation can replay it. */
 	output: string;

@@ -2,15 +2,15 @@ import {
 	PROTOCOL_VERSION,
 	type ConversationConfig,
 	type ConversationSummary,
-	type DiffHunk,
 	type DomContext,
-	type HarnessEvent,
+	type LiveTurnSnapshot,
 	type MessageBlock,
 	type PromptElement,
 	type ServerMessage,
 	type SourceLocation,
 	type TurnSummary,
 } from "@pincer/core";
+import { GitDiffCollector } from "./diffCollector";
 import type { Git } from "./git";
 import { HarnessRunner } from "./harnesses/runner";
 import type { InstalledHarness } from "./harnesses/types";
@@ -33,8 +33,6 @@ export interface OrchestratorDeps {
 
 const NO_HARNESS_HINT =
 	"No coding Harness is available. Install Claude Code, Codex, or OMP, or configure a Harness command.";
-const MAX_DIFF_FILES = 8;
-const MAX_DIFF_LINES = 240;
 
 /** Composes persistence, HarnessRunner, and TurnScheduler for direct-edit conversations. */
 export class Orchestrator {
@@ -47,6 +45,7 @@ export class Orchestrator {
 	private readonly publish: Emit;
 	private readonly log: (message: string) => void;
 	private readonly runner = new HarnessRunner();
+	private readonly diffCollector: GitDiffCollector;
 	private readonly scheduler: TurnScheduler;
 
 	constructor(deps: OrchestratorDeps) {
@@ -58,11 +57,14 @@ export class Orchestrator {
 		this.configuredDefaultHarnessId = deps.defaultHarnessId;
 		this.publish = deps.publish;
 		this.log = deps.log ?? (() => {});
+		this.diffCollector = new GitDiffCollector(deps.git);
 		this.scheduler = new TurnScheduler({
 			publish: this.publish,
 			execute: (submission, controls) => this.executeTurn(submission, controls),
 			persistQueuedCancellation: (submission) =>
 				this.persistQueuedCancellation(submission),
+			persistUnexpectedError: (submission, snapshot, message) =>
+				this.persistUnexpectedError(submission, snapshot, message),
 			onStateChanged: () => this.publish(this.listConversations()),
 		});
 	}
@@ -276,10 +278,8 @@ export class Orchestrator {
 	}
 
 	private persistQueuedCancellation(submission: TurnSubmission): number {
-		const turns = this.store.getTurns(submission.conversationId);
-		const turnId = this.store.addTurn({
+		const { id: turnId } = this.store.appendTurn({
 			conversation_id: submission.conversationId,
-			seq: turns.length + 1,
 			prompt: submission.prompt,
 			source: submission.source ? JSON.stringify(submission.source) : null,
 			dom_context: JSON.stringify(submission.domContext),
@@ -296,6 +296,39 @@ export class Orchestrator {
 		return turnId;
 	}
 
+	private persistUnexpectedError(
+		submission: TurnSubmission,
+		snapshot: LiveTurnSnapshot,
+		message: string,
+	): { turnId: number; seq: number } {
+		const blocks = snapshot.blocks.length
+			? snapshot.blocks
+			: [{ t: "md" as const, text: message }];
+		if (snapshot.turnId !== null && snapshot.seq !== null) {
+			this.store.updateTurn(snapshot.turnId, {
+				output: outputFromBlocks(blocks),
+				blocks: JSON.stringify(blocks),
+				status: "error",
+			});
+			return { turnId: snapshot.turnId, seq: snapshot.seq };
+		}
+		const persisted = this.store.appendTurn({
+			conversation_id: submission.conversationId,
+			prompt: submission.prompt,
+			source: submission.source ? JSON.stringify(submission.source) : null,
+			dom_context: JSON.stringify(submission.domContext),
+			harness_id: submission.selection.harnessId,
+			resume_token: null,
+			checkpoint: null,
+			parent_checkpoint: null,
+			output: outputFromBlocks(blocks),
+			blocks: JSON.stringify(blocks),
+			status: "error",
+			created_at: Date.now(),
+		});
+		return { turnId: persisted.id, seq: persisted.seq };
+	}
+
 	private async executeTurn(
 		submission: TurnSubmission,
 		controls: TurnExecutionControls,
@@ -308,9 +341,8 @@ export class Orchestrator {
 				`Harness became unavailable: ${submission.selection.harnessId}`,
 			);
 
-		const beforeDiff = await this.snapshotDiff();
+		const beforeDiff = await this.diffCollector.snapshot();
 		const turns = this.store.getTurns(submission.conversationId);
-		const seq = turns.length + 1;
 		let resumeToken: string | null = null;
 		if (harness.definition.capabilities.resume) {
 			for (let index = turns.length - 1; index >= 0; index -= 1) {
@@ -322,9 +354,8 @@ export class Orchestrator {
 			}
 		}
 
-		const turnId = this.store.addTurn({
+		const { id: turnId, seq } = this.store.appendTurn({
 			conversation_id: submission.conversationId,
-			seq,
 			prompt: submission.prompt,
 			source: submission.source ? JSON.stringify(submission.source) : null,
 			dom_context: JSON.stringify(submission.domContext),
@@ -409,7 +440,7 @@ export class Orchestrator {
 			return;
 		}
 
-		for (const diff of await this.collectDiffs(beforeDiff))
+		for (const diff of await this.diffCollector.collect(beforeDiff))
 			controls.event(diff);
 		if (controls.cancellationRequested) {
 			this.store.setTurnStatus(turnId, "cancelled");
@@ -446,47 +477,6 @@ export class Orchestrator {
 		this.log(
 			`turn complete conversation=${submission.conversationId} turn=${seq}`,
 		);
-	}
-
-	private async snapshotDiff(): Promise<Map<string, DiffHunk[]>> {
-		const snapshot = new Map<string, DiffHunk[]>();
-		try {
-			for (const block of parseUnifiedDiff(await this.git.rawDiff()))
-				snapshot.set(block.file, block.hunks);
-		} catch {
-			/* Git diff is optional for Harness execution. */
-		}
-		return snapshot;
-	}
-
-	private async collectDiffs(
-		before: Map<string, DiffHunk[]>,
-	): Promise<Extract<HarnessEvent, { kind: "diff" }>[]> {
-		let after: Extract<HarnessEvent, { kind: "diff" }>[];
-		try {
-			after = parseUnifiedDiff(await this.git.rawDiff());
-		} catch {
-			return [];
-		}
-
-		return after
-			.map((block) => {
-				const priorCounts = new Map<string, number>();
-				for (const hunk of before.get(block.file) ?? []) {
-					const key = `${hunk.type}\u0000${hunk.text}`;
-					priorCounts.set(key, (priorCounts.get(key) ?? 0) + 1);
-				}
-				const hunks = block.hunks.filter((hunk) => {
-					const key = `${hunk.type}\u0000${hunk.text}`;
-					const count = priorCounts.get(key) ?? 0;
-					if (count === 0) return true;
-					priorCounts.set(key, count - 1);
-					return false;
-				});
-				return { ...block, hunks };
-			})
-			.filter((block) => block.hunks.length > 0)
-			.slice(0, MAX_DIFF_FILES);
 	}
 
 	private toSummary(row: ConversationRow): ConversationSummary {
@@ -551,46 +541,6 @@ function outputFromBlocks(blocks: MessageBlock[]): string {
 		)
 		.map((block) => block.text)
 		.join("");
-}
-
-/** Parse git's unified diff into bounded browser blocks. */
-function parseUnifiedDiff(
-	raw: string,
-): Extract<HarnessEvent, { kind: "diff" }>[] {
-	if (!raw.trim()) return [];
-	const files: Extract<HarnessEvent, { kind: "diff" }>[] = [];
-	let current: Extract<HarnessEvent, { kind: "diff" }> | null = null;
-	let inHunk = false;
-	for (const line of raw.split("\n")) {
-		if (line.startsWith("diff --git")) {
-			current = { kind: "diff", file: "", hunks: [] };
-			files.push(current);
-			inHunk = false;
-			continue;
-		}
-		if (!current) continue;
-		if (line.startsWith("+++ b/")) {
-			current.file = line.slice(6);
-			continue;
-		}
-		if (line.startsWith("+++ ")) {
-			current.file = line.slice(4).replace(/^b\//, "");
-			continue;
-		}
-		if (line.startsWith("@@")) {
-			inHunk = true;
-			continue;
-		}
-		if (!inHunk || current.hunks.length >= MAX_DIFF_LINES) continue;
-		if (line.startsWith("+") && !line.startsWith("+++")) {
-			current.hunks.push({ type: "add", text: line.slice(1) });
-		} else if (line.startsWith("-") && !line.startsWith("---")) {
-			current.hunks.push({ type: "del", text: line.slice(1) });
-		} else if (line.startsWith(" ")) {
-			current.hunks.push({ type: "ctx", text: line.slice(1) });
-		}
-	}
-	return files.filter((file) => file.file.length > 0 && file.hunks.length > 0);
 }
 
 function toTurnSummary(row: TurnRow): TurnSummary {

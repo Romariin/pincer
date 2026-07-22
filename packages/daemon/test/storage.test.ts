@@ -301,10 +301,94 @@ test("legacy Agent rows retain conversation and turn history while unsafe unqual
 				.query("SELECT value FROM meta WHERE key = 'schema_version'")
 				.get(),
 		).toEqual({
-			value: "2",
+			value: "3",
 		});
 	} finally {
 		migrated.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("turn append allocates sequence numbers atomically and schema enforces ownership", () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-store-constraints-"));
+	const historyDbPath = join(root, "history.db");
+	const store = new Store(historyDbPath);
+	const now = Date.now();
+	try {
+		store.createConversation({
+			id: "conversation",
+			branch: "main",
+			base_branch: "main",
+			base_commit: "abc123",
+			status: "active",
+			harness_id: "omp",
+			model: "model",
+			effort: "",
+			created_at: now,
+			updated_at: now,
+		});
+		const turn = {
+			conversation_id: "conversation",
+			prompt: "prompt",
+			source: null,
+			dom_context: null,
+			harness_id: "omp",
+			resume_token: null,
+			checkpoint: null,
+			parent_checkpoint: null,
+			output: null,
+			blocks: null,
+			status: "running" as const,
+			created_at: now,
+		};
+		expect(store.appendTurn(turn)).toMatchObject({ seq: 1 });
+		expect(store.appendTurn({ ...turn, prompt: "second" })).toMatchObject({
+			seq: 2,
+		});
+	} finally {
+		store.close();
+	}
+
+	const db = new Database(historyDbPath);
+	try {
+		db.exec("PRAGMA foreign_keys = ON");
+		expect(
+			(db.query("PRAGMA foreign_key_list(turns)").all() as { table: string }[]).map(
+				(row) => row.table,
+			),
+		).toContain("conversations");
+		expect(() =>
+			db
+				.query(
+					`INSERT INTO turns
+             (conversation_id, seq, prompt, harness_id, status, created_at)
+           VALUES ('missing', 1, 'orphan', 'omp', 'error', 1)`,
+				)
+				.run(),
+		).toThrow();
+		expect(() =>
+			db
+				.query(
+					`INSERT INTO turns
+             (conversation_id, seq, prompt, harness_id, status, created_at)
+           VALUES ('conversation', 2, 'duplicate', 'omp', 'error', 1)`,
+				)
+				.run(),
+		).toThrow();
+		expect(() =>
+			db
+				.query("UPDATE conversations SET status = 'unknown' WHERE id = 'conversation'")
+				.run(),
+		).toThrow();
+		expect(() =>
+			db.query("UPDATE turns SET status = 'unknown' WHERE id = 1").run(),
+		).toThrow();
+		db.query("DELETE FROM conversations WHERE id = 'conversation'").run();
+		expect(db.query("SELECT COUNT(*) AS count FROM turns").get()).toEqual({
+			count: 0,
+		});
+	} finally {
+		db.close();
 		rmSync(root, { recursive: true, force: true });
 	}
 });
