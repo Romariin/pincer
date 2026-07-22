@@ -1,4 +1,3 @@
-import overlayBundle from "../../overlay/dist/overlay.js" with { type: "text" };
 import type { Server, ServerWebSocket, Subprocess } from "bun";
 import { CONTRACT_A_VERSION } from "@pincer/core";
 import { isLocalOrigin, startDaemon, type RunningDaemon } from "./server";
@@ -25,6 +24,7 @@ export interface DevProxyOptions {
 	/** Daemon WebSocket URL injected into the page config. */
 	wsUrl: string;
 	projectRoot: string;
+	overlayBundle: string;
 	log?: (msg: string) => void;
 }
 
@@ -41,8 +41,8 @@ export interface ProxyWsData {
 	pending: (string | Uint8Array)[];
 }
 
-function overlayResponse(): Response {
-	return new Response(overlayBundle, {
+function overlayResponse(bundle: string): Response {
+	return new Response(bundle, {
 		headers: { "content-type": "text/javascript", "cache-control": "no-store" },
 	});
 }
@@ -92,7 +92,8 @@ export function startDevProxy(opts: DevProxyOptions): RunningProxy {
 		async fetch(req, srv) {
 			const url = new URL(req.url);
 
-			if (url.pathname === "/__pincer/overlay.js") return overlayResponse();
+			if (url.pathname === "/__pincer/overlay.js")
+				return overlayResponse(opts.overlayBundle);
 
 			if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
 				const origin = req.headers.get("origin");
@@ -319,9 +320,11 @@ export interface DevOptions {
 	harnessCommands?: Record<string, string[]>;
 	dataRoot?: string;
 	log: (msg: string) => void;
+	overlayBundle?: string;
 }
 
 export async function runDev(opts: DevOptions): Promise<void> {
+	const overlayBundle = opts.overlayBundle ?? (await import("./overlayAsset")).default;
 	const daemon: RunningDaemon = await startDaemon({
 		projectRoot: opts.projectRoot,
 		port: opts.daemonPort,
@@ -391,6 +394,7 @@ export async function runDev(opts: DevOptions): Promise<void> {
 			port: opts.proxyPort,
 			wsUrl: `ws://127.0.0.1:${daemon.port}`,
 			projectRoot: opts.projectRoot,
+			overlayBundle,
 			log: opts.log,
 		});
 	} catch (err) {

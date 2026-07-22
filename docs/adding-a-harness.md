@@ -7,11 +7,14 @@ A Harness is the daemon-side adapter for a coding CLI. Built-ins are deliberatel
 Add `packages/daemon/src/harnesses/<id>.ts` and export a `HarnessDefinition` from `types.ts`. A definition owns only vendor behavior:
 
 - `id`, browser-safe `display` metadata, `defaultCommand`, and `probeArgs`;
-- a `catalog` command and decoder that return only models reported by the CLI;
+- explicit `capabilities` for model selection, effort selection, and resume;
+- an optional advisory `catalog` command and decoder that return only models reported by the CLI;
 - `buildTurn`, which returns argv and optional stdin without invoking a process;
 - `decodeRecord`, which converts one parsed output record into `HarnessEvent`s.
 
 Use argv arrays rather than shell strings. Treat model, effort, and resume-token values as opaque vendor values. Use `composePrompt(request)` for the common source, DOM, attachment, and user-prompt context. Decoders must validate unknown input and return `invalid` with a useful diagnostic rather than throwing.
+
+CLI detection and catalog discovery are independent. A missing or failed catalog must not hide an installed CLI: Pincer exposes the Harness with `catalog.status` set to `unsupported` or `failed`, and an empty model keeps the vendor CLI's own default. Probe and catalog commands receive the target project's working directory and environment through the shared runtime context.
 
 The event vocabulary is intentionally small: `status`, `text`, `tool`, `session`, and terminal `result`. Git diffs are collected by the orchestrator, not by Harness adapters.
 
@@ -25,7 +28,7 @@ Do not add vendor-specific branches to the runner, orchestrator, or overlay. `Ha
 
 At minimum add focused tests for:
 
-1. catalog build/decode, including malformed and empty output;
+1. probe and optional catalog build/decode, including unsupported, malformed, failed, and empty output;
 2. turn argv/stdin for fresh and resumed turns and opaque model/effort values;
 3. every supported, ignored, and malformed output-record shape;
 4. registry detection and the browser descriptor;

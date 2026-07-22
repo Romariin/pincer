@@ -80,6 +80,7 @@ test("pincer -- <command> launches the app through the injection proxy", async (
 			...process.env,
 			HOME: home,
 			PINCER_FAKE_DESCENDANT_PID_FILE: descendantPidFile,
+			PINCER_OVERLAY_BUNDLE: "globalThis.__pincerTestOverlay=true;".repeat(40),
 		},
 		stdin: "ignore",
 		stdout: "pipe",

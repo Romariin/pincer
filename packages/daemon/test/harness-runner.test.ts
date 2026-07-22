@@ -21,6 +21,18 @@ import { FAKE_RUNNER } from "./harness";
 setDefaultTimeout(15_000);
 
 const roots: string[] = [];
+
+function processIsRunning(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+	} catch {
+		return false;
+	}
+	if (process.platform === "win32") return true;
+	const result = Bun.spawnSync(["ps", "-o", "state=", "-p", String(pid)]);
+	return result.exitCode === 0 && !result.stdout.toString().trim().startsWith("Z");
+}
+
 afterEach(() => {
 	for (const root of roots.splice(0))
 		rmSync(root, { recursive: true, force: true });
@@ -446,11 +458,11 @@ test("cancellation stops descendants after the Harness leader has already exited
 	);
 	await running.outcome;
 	const childPid = Number(readFileSync(childPidFile, "utf8"));
-	expect(() => process.kill(childPid, 0)).not.toThrow();
+	expect(processIsRunning(childPid)).toBe(true);
 
 	try {
 		await running.cancel();
-		expect(() => process.kill(childPid, 0)).toThrow();
+		expect(processIsRunning(childPid)).toBe(false);
 	} finally {
 		try {
 			process.kill(childPid, "SIGKILL");

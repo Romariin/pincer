@@ -228,6 +228,9 @@ if (proxyMode) {
 		selectedHarnessId,
 		harnessCommands,
 		log,
+		...(process.env.PINCER_OVERLAY_BUNDLE === undefined
+			? {}
+			: { overlayBundle: process.env.PINCER_OVERLAY_BUNDLE }),
 	});
 } else {
 	const daemon = await startDaemon({
