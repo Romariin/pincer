@@ -703,6 +703,67 @@ test("switching Harness selects its CLI-default model and clears effort", () => 
 	});
 });
 
+describe("conversation config acknowledgements", () => {
+	test("existing conversation config changes apply only after acknowledgement", () => {
+		resetStore();
+		const sent: ClientMessage[] = [];
+		usePincerStore.setState({ connected: true, send: (message) => sent.push(message) });
+		resume(conversation("config"));
+
+		usePincerStore.getState().updateCfg({ model: "next-model" });
+
+		expect(usePincerStore.getState().conversations[0]?.model).toBe("gpt-5");
+		expect(sent).toEqual([
+			{
+				v: PROTOCOL_VERSION,
+				type: "set_config",
+				conversationId: "config",
+				model: "next-model",
+			},
+		]);
+		expect(usePincerStore.getState().configPending.config).toBe(true);
+
+		apply({
+			v: PROTOCOL_VERSION,
+			type: "config_updated",
+			conversation: { ...conversation("config"), model: "next-model" },
+		});
+		expect(usePincerStore.getState().conversations[0]?.model).toBe("next-model");
+		expect(usePincerStore.getState().configPending.config).toBeUndefined();
+	});
+
+	test("config updates are rejected while disconnected, pending, queued or running", () => {
+		resetStore();
+		const sent: ClientMessage[] = [];
+		usePincerStore.setState({ send: (message) => sent.push(message) });
+		resume(conversation("config"));
+		usePincerStore.getState().updateCfg({ model: "offline" });
+		expect(sent).toEqual([]);
+
+		usePincerStore.setState({ connected: true });
+		usePincerStore.getState().updateCfg({ model: "pending" });
+		usePincerStore.getState().updateCfg({ effort: "low" });
+		expect(sent).toHaveLength(1);
+		usePincerStore.getState().setConnected(false);
+		expect(usePincerStore.getState().configPending).toEqual({});
+		expect(usePincerStore.getState().conversations[0]).toMatchObject({
+			model: "gpt-5",
+			effort: "high",
+		});
+
+		for (const turnState of ["queued", "running"] as const) {
+			usePincerStore.setState({ connected: true });
+			resume(conversation("config", turnState), [], liveTurn("config", {
+				state: turnState,
+				turnId: turnState === "queued" ? null : 1,
+				seq: turnState === "queued" ? null : 0,
+			}));
+			usePincerStore.getState().updateCfg({ model: `during-${turnState}` });
+		}
+		expect(sent).toHaveLength(1);
+	});
+});
+
 describe("overlay settings acknowledgements", () => {
 	test("settings changes apply only after the daemon acknowledgement", () => {
 		resetStore();

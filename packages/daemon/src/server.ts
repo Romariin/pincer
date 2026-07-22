@@ -2,15 +2,14 @@ import type { Server, ServerWebSocket } from "bun";
 import { realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
+	MAX_CLIENT_FRAME_BYTES,
 	PROTOCOL_VERSION,
-	isKeyboardShortcut,
+	parseClientMessage,
+	type ClientMessage,
 	type ConversationConfig,
-	type DomContext,
 	type KeyboardShortcut,
 	type OverlaySettings,
-	type PromptElement,
 	type ServerMessage,
-	type SourceLocation,
 } from "@pincer/core";
 import { Git } from "./git";
 import { Store } from "./store";
@@ -131,6 +130,17 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 				const emit: Emit = (message) => {
 					ws.send(JSON.stringify(message));
 				};
+				const frameBytes =
+					typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength;
+				if (frameBytes > MAX_CLIENT_FRAME_BYTES) {
+					emit({
+						v: PROTOCOL_VERSION,
+						type: "error",
+						code: "bad_message",
+						message: "Message is too large.",
+					});
+					return;
+				}
 				let parsed: unknown;
 				try {
 					parsed = JSON.parse(typeof raw === "string" ? raw : raw.toString());
@@ -143,9 +153,19 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 					});
 					return;
 				}
+				const result = parseClientMessage(parsed);
+				if (!result.ok) {
+					emit({
+						v: PROTOCOL_VERSION,
+						type: "error",
+						code: "bad_message",
+						message: result.error,
+					});
+					return;
+				}
 				await dispatch(
 					orchestrator,
-					parsed,
+					result.value,
 					opts.projectRoot,
 					settingsStore,
 					emit,
@@ -175,12 +195,12 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	};
 }
 
-function readConfig(msg: Record<string, unknown>): ConversationConfig {
-	const c: ConversationConfig = {};
-	if (typeof msg.harnessId === "string") c.harnessId = msg.harnessId;
-	if (typeof msg.model === "string") c.model = msg.model;
-	if (typeof msg.effort === "string") c.effort = msg.effort;
-	return c;
+function readConfig(msg: ConversationConfig): ConversationConfig {
+	return {
+		...(msg.harnessId === undefined ? {} : { harnessId: msg.harnessId }),
+		...(msg.model === undefined ? {} : { model: msg.model }),
+		...(msg.effort === undefined ? {} : { effort: msg.effort }),
+	};
 }
 
 export interface SettingsRepository {
@@ -198,10 +218,9 @@ export interface SettingsRepository {
 }
 
 function canonicalAppRoot(
-	raw: unknown,
+	raw: string,
 	daemonProjectRoot: string,
 ): string | null {
-	if (typeof raw !== "string") return null;
 	try {
 		const projectRoot = realpathSync(daemonProjectRoot);
 		const appRoot = realpathSync(raw);
@@ -218,8 +237,7 @@ function canonicalAppRoot(
 	}
 }
 
-function canonicalAppOrigin(raw: unknown): string | null {
-	if (typeof raw !== "string") return null;
+function canonicalAppOrigin(raw: string): string | null {
 	try {
 		const url = new URL(raw);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
@@ -229,18 +247,17 @@ function canonicalAppOrigin(raw: unknown): string | null {
 	}
 }
 
+type SettingsMessage = Extract<
+	ClientMessage,
+	{ type: "get_overlay_settings" | "update_overlay_settings" }
+>;
+
 export function handleSettingsMessage(
-	raw: Record<string, unknown>,
+	raw: SettingsMessage,
 	daemonProjectRoot: string,
 	settings: SettingsRepository,
 	emit: Emit,
 ): boolean {
-	if (
-		raw.type !== "get_overlay_settings" &&
-		raw.type !== "update_overlay_settings"
-	)
-		return false;
-
 	const appRoot = canonicalAppRoot(raw.appRoot, daemonProjectRoot);
 	if (!appRoot) {
 		emit({
@@ -273,25 +290,9 @@ export function handleSettingsMessage(
 			return true;
 		}
 
-		const hasShortcut = Object.hasOwn(raw, "shortcut");
-		const hasFloatingButton = Object.hasOwn(raw, "showFloatingButton");
-		if (
-			(!hasShortcut && !hasFloatingButton) ||
-			(hasShortcut && !isKeyboardShortcut(raw.shortcut)) ||
-			(hasFloatingButton && typeof raw.showFloatingButton !== "boolean")
-		) {
-			emit({
-				v: PROTOCOL_VERSION,
-				type: "error",
-				code: "bad_message",
-				message: "Invalid overlay settings update.",
-			});
-			return true;
-		}
-
 		const patch: { shortcut?: KeyboardShortcut; showFloatingButton?: boolean } =
 			{};
-		if (isKeyboardShortcut(raw.shortcut)) patch.shortcut = raw.shortcut;
+		if (raw.shortcut) patch.shortcut = raw.shortcut;
 		if (typeof raw.showFloatingButton === "boolean") {
 			patch.showFloatingButton = raw.showFloatingButton;
 		}
@@ -311,28 +312,13 @@ export function handleSettingsMessage(
 	return true;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
 async function dispatch(
 	orch: Orchestrator,
-	raw: unknown,
+	msg: ClientMessage,
 	daemonProjectRoot: string,
 	settings: SettingsRepository,
 	emit: Emit,
 ): Promise<void> {
-	if (!isRecord(raw)) {
-		emit({
-			v: PROTOCOL_VERSION,
-			type: "error",
-			code: "bad_message",
-			message: "Expected an object.",
-		});
-		return;
-	}
-	const msg = raw;
-	if (handleSettingsMessage(msg, daemonProjectRoot, settings, emit)) return;
 	switch (msg.type) {
 		case "list_conversations":
 			emit(orch.listConversations());
@@ -341,53 +327,40 @@ async function dispatch(
 			emit(await orch.newConversation(readConfig(msg)));
 			return;
 		case "resume_conversation":
-			emit(orch.resumeConversation(String(msg.conversationId)));
+			emit(orch.resumeConversation(msg.conversationId));
 			return;
 		case "set_config":
-			emit(orch.setConfig(String(msg.conversationId), readConfig(msg)));
+			emit(orch.setConfig(msg.conversationId, readConfig(msg)));
 			return;
 		case "delete_conversation":
-			emit(await orch.deleteConversation(String(msg.conversationId)));
+			emit(await orch.deleteConversation(msg.conversationId));
 			return;
 		case "prompt": {
-			const domContext = (msg.domContext as DomContext | undefined) ?? {
-				tag: "unknown",
-				id: null,
-				classes: [],
-				text: null,
-				ancestry: [],
-			};
-			const elements = Array.isArray(msg.elements)
-				? (msg.elements as PromptElement[])
-				: [];
 			const rejection = orch.submitTurn(
-				String(msg.conversationId),
-				String(msg.prompt ?? ""),
-				(msg.source as SourceLocation | null) ?? null,
-				domContext,
-				elements,
+				msg.conversationId,
+				msg.prompt,
+				msg.source,
+				msg.domContext,
+				msg.elements ?? [],
 			);
 			if (rejection) emit(rejection);
 			return;
 		}
 		case "cancel":
-			await orch.cancel(String(msg.conversationId));
+			await orch.cancel(msg.conversationId);
 			return;
 		case "revert":
-			emit(await orch.revert(String(msg.conversationId)));
+			emit(await orch.revert(msg.conversationId));
 			return;
 		case "accept":
-			emit(await orch.accept(String(msg.conversationId)));
+			emit(await orch.accept(msg.conversationId));
 			return;
 		case "discard":
-			emit(await orch.discard(String(msg.conversationId)));
+			emit(await orch.discard(msg.conversationId));
 			return;
-		default:
-			emit({
-				v: PROTOCOL_VERSION,
-				type: "error",
-				code: "bad_message",
-				message: `Unknown message type: ${String(msg.type)}`,
-			});
+		case "get_overlay_settings":
+		case "update_overlay_settings":
+			handleSettingsMessage(msg, daemonProjectRoot, settings, emit);
+			return;
 	}
 }

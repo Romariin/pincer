@@ -2,7 +2,11 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { PROTOCOL_VERSION, type ConversationConfig } from "@pincer/core";
+import {
+	PROTOCOL_VERSION,
+	type ClientMessage,
+	type ConversationConfig,
+} from "@pincer/core";
 import { createHarness, type Harness } from "./harness";
 
 const V = PROTOCOL_VERSION;
@@ -68,6 +72,40 @@ function rows(
 		db.close();
 	}
 }
+
+test("malformed WebSocket messages are rejected before dispatch", async () => {
+	harness = await createHarness();
+	await harness.next("welcome");
+	const malformed: unknown[] = [
+		{ v: V + 1, type: "new_conversation" },
+		{ v: V, type: "new_conversation", harnessId: 12 },
+		{ v: V, type: "resume_conversation", conversationId: null },
+		{
+			v: V,
+			type: "prompt",
+			conversationId: "never-created",
+			prompt: "run despite malformed context",
+			source: { path: "src/App.tsx", line: "2", column: 0 },
+			domContext: harness.domContext,
+		},
+		{
+			v: V,
+			type: "prompt",
+			conversationId: "never-created",
+			prompt: "x".repeat(1_100_000),
+			source: null,
+			domContext: harness.domContext,
+		},
+	];
+
+	for (const message of malformed) {
+		harness.send(message as ClientMessage);
+		expect(await harness.next("error")).toMatchObject({ code: "bad_message" });
+	}
+	harness.send({ v: V, type: "list_conversations" });
+	expect((await harness.next("conversations")).items).toEqual([]);
+	expect(harness.invocations()).toEqual([]);
+});
 
 test("an explicit unknown or unavailable Harness blocks instead of falling back to detected OMP", async () => {
 	harness = await createHarness({ selectedHarnessId: "claude-code" });

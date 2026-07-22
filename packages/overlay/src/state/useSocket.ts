@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { PROTOCOL_VERSION } from "@pincer/core";
 import type { ClientMessage, ServerMessage } from "@pincer/core";
 import { usePincerStore } from "./store";
+import { PincerClient } from "./transport";
 
 const MAX_BACKOFF = 30_000;
 
@@ -38,6 +38,7 @@ export function useSocket(): void {
 		const send = (msg: ClientMessage): void => {
 			if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 		};
+		const client = new PincerClient(send);
 		setSend(send);
 
 		const scheduleReconnect = (): void => {
@@ -60,22 +61,13 @@ export function useSocket(): void {
 				backoff = 500;
 				setConnected(true);
 				prepareSettings(appRoot, appOrigin, identityError);
-				send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+				client.listConversations();
 				const current = usePincerStore.getState();
 				if (current.view === "chat" && current.conversationId) {
-					send({
-						v: PROTOCOL_VERSION,
-						type: "resume_conversation",
-						conversationId: current.conversationId,
-					});
+					client.resumeConversation(current.conversationId);
 				}
 				if (appRoot && appOrigin) {
-					send({
-						v: PROTOCOL_VERSION,
-						type: "get_overlay_settings",
-						appRoot,
-						appOrigin,
-					});
+					client.getOverlaySettings(appRoot, appOrigin);
 				}
 			});
 			socket.addEventListener("message", (ev: MessageEvent) => {

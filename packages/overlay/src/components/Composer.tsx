@@ -5,7 +5,6 @@ import {
 	type KeyboardEvent,
 	type ReactNode,
 } from "react";
-import { PROTOCOL_VERSION } from "@pincer/core";
 import type { PromptElement } from "@pincer/core";
 import { selectVisibleTurnState, usePincerStore } from "@/state/store";
 import { Button } from "./ui/button";
@@ -50,25 +49,9 @@ export function Composer(): ReactNode {
 			domContext: primary.domContext,
 			elements,
 		};
+		state.submitPrompt(payload);
 		setText("");
 		state.clearSelections();
-		if (state.view === "chat" && state.conversationId) {
-			const conversationId = state.conversationId;
-			state.queueUserMessage(conversationId, trimmed, elements.length);
-			state.send({
-				v: PROTOCOL_VERSION,
-				type: "prompt",
-				conversationId,
-				...payload,
-			});
-		} else {
-			state.setPendingPrompt(payload);
-			state.send({
-				v: PROTOCOL_VERSION,
-				type: "new_conversation",
-				...state.draft,
-			});
-		}
 	};
 
 	const onSend = (): void => {
@@ -78,11 +61,7 @@ export function Composer(): ReactNode {
 			state.conversationId &&
 			selectVisibleTurnState(state) !== "idle"
 		) {
-			state.send({
-				v: PROTOCOL_VERSION,
-				type: "cancel",
-				conversationId: state.conversationId,
-			});
+			state.cancelVisibleTurn();
 		} else {
 			submit();
 		}

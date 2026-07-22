@@ -1,13 +1,12 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
+import { DEFAULT_TOGGLE_SHORTCUT } from "@pincer/core";
 import type {
 	ClientMessage,
 	ConversationSummary,
 	DomContext,
 	HarnessDescriptor,
 	KeyboardShortcut,
-	LiveTurnSnapshot,
 	MessageBlock,
 	PromptElement,
 	ServerMessage,
@@ -16,36 +15,29 @@ import type {
 } from "@pincer/core";
 import { harnessInfo } from "@/lib/harness";
 import { buildDomContext, resolveSource } from "@/dom/picker";
+import { PincerClient } from "./transport";
+import {
+	assistantMsg,
+	conversationCfg,
+	emptyThread,
+	finishThread,
+	mergeLiveTurn,
+	replaceConversation,
+	updateConversationTurnState,
+	upsertConversation,
+	userMsg,
+	withSystemNote,
+	type Cfg,
+	type ConversationThread,
+	type Msg,
+} from "./thread";
+
+export type { Cfg, ConversationThread, Msg } from "./thread";
 
 export type View = "list" | "chat" | "settings";
 export type PickerKind = "harness" | "model" | "effort";
 export type ReferenceCopyStatus = "idle" | "selecting" | "copied" | "error";
 
-export interface Cfg {
-	harnessId: string;
-	model: string;
-	effort: string;
-}
-
-export interface Msg {
-	id: number;
-	role: "user" | "assistant" | "system";
-	blocks: MessageBlock[];
-	/** Command-bar config captured when an assistant turn began (drives the meta badge). */
-	meta?: Cfg;
-	/** Number of elements attached to a user prompt (drives the chip count label). */
-	elementCount?: number;
-}
-
-export interface ConversationThread {
-	messages: Msg[];
-	/** Index of the assistant message receiving output for the live turn. */
-	streamingIndex: number | null;
-	turnState: TurnState;
-	queuePosition: number | null;
-	turnId: number | null;
-	liveTurnSeq: number | null;
-}
 
 export interface Selection {
 	id: number;
@@ -61,14 +53,23 @@ export interface PendingPrompt {
 	elements: PromptElement[];
 }
 
-let nextMessageId = 0;
 let nextSelectionId = 0;
 let referenceCopyResetVersion = 0;
 
-function createMessageId(): number {
-	nextMessageId += 1;
-	return nextMessageId;
+function client(send: (message: ClientMessage) => void): PincerClient {
+	return new PincerClient(send);
 }
+
+function withoutPending(
+	pending: Record<string, boolean>,
+	conversationId: string,
+): Record<string, boolean> {
+	if (!pending[conversationId]) return pending;
+	const next = { ...pending };
+	delete next[conversationId];
+	return next;
+}
+
 
 export interface PincerStore {
 	// ---- connection / view ----
@@ -76,7 +77,6 @@ export interface PincerStore {
 	view: View;
 	panelOpen: boolean;
 	selecting: boolean;
-	turnRunning: boolean;
 	picker: PickerKind | null;
 	referenceCopyStatus: ReferenceCopyStatus;
 
@@ -100,6 +100,7 @@ export interface PincerStore {
 	conversationId: string | null;
 	threads: Record<string, ConversationThread>;
 	pendingPrompt: PendingPrompt | null;
+	configPending: Record<string, boolean>;
 
 	// ---- element selections ----
 	selections: Selection[];
@@ -116,7 +117,6 @@ export interface PincerStore {
 	openSettings: () => void;
 	closePicker: () => void;
 	setSelecting: (on: boolean) => void;
-	setTurnRunning: (running: boolean) => void;
 	startCopyingReference: () => void;
 	finishCopyingReference: (status: "copied" | "error") => void;
 	prepareSettings: (
@@ -145,6 +145,10 @@ export interface PincerStore {
 		count: number,
 	) => void;
 	setPendingPrompt: (p: PendingPrompt | null) => void;
+	openConversation: (conversationId: string) => void;
+	deleteConversation: (conversationId: string) => void;
+	submitPrompt: (payload: PendingPrompt) => void;
+	cancelVisibleTurn: () => void;
 
 	// ---- protocol ----
 	applyServerMessage: (msg: ServerMessage) => void;
@@ -159,151 +163,6 @@ export function computeCfg(s: PincerStore): Cfg {
 	return { ...s.draft };
 }
 
-function userMsg(text: string, count: number): Msg {
-	return {
-		id: createMessageId(),
-		role: "user",
-		blocks: [{ t: "md", text }],
-		elementCount: count,
-	};
-}
-
-function emptyThread(): ConversationThread {
-	return {
-		messages: [],
-		streamingIndex: null,
-		turnState: "idle",
-		queuePosition: null,
-		turnId: null,
-		liveTurnSeq: null,
-	};
-}
-
-function conversationCfg(conversation: ConversationSummary): Cfg {
-	return {
-		harnessId: conversation.harnessId,
-		model: conversation.model,
-		effort: conversation.effort,
-	};
-}
-
-function upsertConversation(
-	conversations: ConversationSummary[],
-	conversation: ConversationSummary,
-): ConversationSummary[] {
-	return [
-		conversation,
-		...conversations.filter((item) => item.id !== conversation.id),
-	];
-}
-
-function replaceConversation(
-	conversations: ConversationSummary[],
-	conversation: ConversationSummary,
-): ConversationSummary[] {
-	if (!conversations.some((item) => item.id === conversation.id)) {
-		return [conversation, ...conversations];
-	}
-	return conversations.map((item) =>
-		item.id === conversation.id ? conversation : item,
-	);
-}
-
-function updateConversationTurnState(
-	conversations: ConversationSummary[],
-	conversationId: string,
-	turnState: TurnState,
-	queuePosition: number | null,
-): ConversationSummary[] {
-	return conversations.map((conversation) =>
-		conversation.id === conversationId
-			? { ...conversation, turnState, queuePosition }
-			: conversation,
-	);
-}
-
-function mergeLiveTurn(
-	thread: ConversationThread,
-	liveTurn: LiveTurnSnapshot,
-): ConversationThread {
-	let messages = thread.messages;
-	const last = messages[messages.length - 1];
-	const sameLiveTurn =
-		thread.turnState !== "idle" &&
-		((liveTurn.seq !== null && thread.liveTurnSeq === liveTurn.seq) ||
-			(thread.turnState === "queued" &&
-				thread.turnId === null &&
-				last?.role === "user" &&
-				last.blocks[0]?.t === "md" &&
-				last.blocks[0].text === liveTurn.prompt));
-
-	if (!sameLiveTurn) {
-		messages = [...messages, userMsg(liveTurn.prompt, 0)];
-	}
-
-	let streamingIndex: number | null = null;
-	if (liveTurn.state === "running") {
-		const meta: Cfg = { ...liveTurn.selection };
-		if (sameLiveTurn && thread.streamingIndex !== null) {
-			streamingIndex = thread.streamingIndex;
-			messages = messages.map((message, index) =>
-				index === streamingIndex
-					? { ...message, blocks: liveTurn.blocks, meta }
-					: message,
-			);
-		} else {
-			streamingIndex = messages.length;
-			messages = [
-				...messages,
-				{
-					id: createMessageId(),
-					role: "assistant",
-					blocks: liveTurn.blocks,
-					meta,
-				},
-			];
-		}
-	}
-
-	return {
-		messages,
-		streamingIndex,
-		turnState: liveTurn.state,
-		queuePosition: liveTurn.queuePosition,
-		turnId: liveTurn.turnId,
-		liveTurnSeq: liveTurn.seq,
-	};
-}
-
-function finishThread(thread: ConversationThread): ConversationThread {
-	const index = thread.streamingIndex;
-	let messages = thread.messages;
-	const current = index === null ? undefined : messages[index];
-	if (current?.role === "assistant" && current.blocks.length === 0) {
-		messages = messages.filter((_, messageIndex) => messageIndex !== index);
-	}
-	return {
-		messages,
-		streamingIndex: null,
-		turnState: "idle",
-		queuePosition: null,
-		turnId: null,
-		liveTurnSeq: null,
-	};
-}
-
-function withSystemNote(
-	thread: ConversationThread,
-	text: string,
-): ConversationThread {
-	return {
-		...thread,
-		messages: [
-			...thread.messages,
-			{ id: createMessageId(), role: "system", blocks: [{ t: "md", text }] },
-		],
-	};
-}
 
 export const usePincerStore = create<PincerStore>()((set, get) => {
 	const appendText = (
@@ -324,10 +183,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				);
 				const meta = conversation ? conversationCfg(conversation) : undefined;
 				streamingIndex = messages.length;
-				messages = [
-					...messages,
-					{ id: createMessageId(), role: "assistant", blocks: [], meta },
-				];
+				messages = [...messages, assistantMsg([], meta)];
 			}
 			messages = messages.map((message, index) => {
 				if (index !== streamingIndex) return message;
@@ -373,10 +229,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				);
 				const meta = conversation ? conversationCfg(conversation) : undefined;
 				streamingIndex = messages.length;
-				messages = [
-					...messages,
-					{ id: createMessageId(), role: "assistant", blocks: [], meta },
-				];
+				messages = [...messages, assistantMsg([], meta)];
 			}
 			messages = messages.map((message, index) =>
 				index === streamingIndex
@@ -420,7 +273,6 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		view: "list",
 		panelOpen: false,
 		selecting: false,
-		turnRunning: false,
 		picker: null,
 		referenceCopyStatus: "idle",
 
@@ -441,6 +293,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		conversationId: null,
 		threads: {},
 		pendingPrompt: null,
+		configPending: {},
 
 		selections: [],
 
@@ -455,6 +308,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							settingsLoaded: false,
 							settingsPending: false,
 							recordingShortcut: false,
+							configPending: {},
 						},
 			),
 
@@ -462,7 +316,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 			if (open === get().panelOpen) return;
 			if (open) {
 				set({ panelOpen: true, view: "list", recordingShortcut: false });
-				get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+				client(get().send).listConversations();
 			} else {
 				set({
 					panelOpen: false,
@@ -493,7 +347,6 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 			referenceCopyResetVersion += 1;
 			set({ selecting: on, referenceCopyStatus: "idle" });
 		},
-		setTurnRunning: (turnRunning) => set({ turnRunning }),
 		startCopyingReference: () => {
 			referenceCopyResetVersion += 1;
 			set({ selecting: true, referenceCopyStatus: "selecting" });
@@ -550,13 +403,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				settingsError: null,
 				recordingShortcut: false,
 			});
-			state.send({
-				v: PROTOCOL_VERSION,
-				type: "update_overlay_settings",
-				appRoot: state.appRoot,
-				appOrigin: state.appOrigin,
-				shortcut,
-			});
+			client(state.send).updateShortcut(state.appRoot, state.appOrigin, shortcut);
 		},
 		updateShowFloatingButton: (showFloatingButton) => {
 			const state = get();
@@ -570,32 +417,33 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				return;
 			}
 			set({ settingsPending: true, settingsError: null });
-			state.send({
-				v: PROTOCOL_VERSION,
-				type: "update_overlay_settings",
-				appRoot: state.appRoot,
-				appOrigin: state.appOrigin,
+			client(state.send).updateFloatingButton(
+				state.appRoot,
+				state.appOrigin,
 				showFloatingButton,
-			});
+			);
 		},
 
 		updateCfg: (patch) => {
 			const state = get();
 			if (state.view === "chat" && state.conversationId) {
 				const conversationId = state.conversationId;
+				const conversation = state.conversations.find(
+					(item) => item.id === conversationId,
+				);
+				const threadState = state.threads[conversationId]?.turnState ?? "idle";
+				if (
+					!state.connected ||
+					state.configPending[conversationId] ||
+					conversation?.turnState !== "idle" ||
+					threadState !== "idle"
+				) {
+					return;
+				}
 				set({
-					conversations: state.conversations.map((conversation) =>
-						conversation.id === conversationId
-							? { ...conversation, ...patch }
-							: conversation,
-					),
+					configPending: { ...state.configPending, [conversationId]: true },
 				});
-				state.send({
-					v: PROTOCOL_VERSION,
-					type: "set_config",
-					conversationId,
-					...patch,
-				});
+				client(state.send).setConfig(conversationId, patch);
 			} else {
 				set({ draft: { ...state.draft, ...patch } });
 			}
@@ -681,6 +529,43 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				};
 			}),
 		setPendingPrompt: (pendingPrompt) => set({ pendingPrompt }),
+		openConversation: (conversationId) => {
+			const state = get();
+			if (!state.connected) return;
+			client(state.send).resumeConversation(conversationId);
+		},
+		deleteConversation: (conversationId) => {
+			const state = get();
+			if (!state.connected) return;
+			client(state.send).deleteConversation(conversationId);
+		},
+		submitPrompt: (payload) => {
+			const state = get();
+			if (!state.connected || selectVisibleTurnState(state) !== "idle") return;
+			if (state.view === "chat" && state.conversationId) {
+				state.queueUserMessage(
+					state.conversationId,
+					payload.prompt,
+					payload.elements.length,
+				);
+				client(state.send).prompt(state.conversationId, payload);
+				return;
+			}
+			set({ pendingPrompt: payload });
+			client(state.send).newConversation(state.draft);
+		},
+		cancelVisibleTurn: () => {
+			const state = get();
+			if (
+				!state.connected ||
+				state.view !== "chat" ||
+				!state.conversationId ||
+				selectVisibleTurnState(state) === "idle"
+			) {
+				return;
+			}
+			client(state.send).cancel(state.conversationId);
+		},
 
 		applyServerMessage: (message) => {
 			const state = get();
@@ -748,14 +633,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 						view: "chat",
 						recordingShortcut: false,
 					});
-					if (pending) {
-						state.send({
-							v: PROTOCOL_VERSION,
-							type: "prompt",
-							conversationId,
-							...pending,
-						});
-					}
+					if (pending) client(state.send).prompt(conversationId, pending);
 					break;
 				}
 				case "conversation_resumed": {
@@ -769,14 +647,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 						)
 							continue;
 						messages.push(userMsg(turn.prompt, 0));
-						if (turn.blocks.length) {
-							messages.push({
-								id: createMessageId(),
-								role: "assistant",
-								blocks: turn.blocks,
-								meta: cfg,
-							});
-						}
+						if (turn.blocks.length) messages.push(assistantMsg(turn.blocks, cfg));
 					}
 					let thread: ConversationThread = { ...emptyThread(), messages };
 					if (message.liveTurn)
@@ -798,6 +669,10 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 						conversations: replaceConversation(
 							state.conversations,
 							message.conversation,
+						),
+						configPending: withoutPending(
+							state.configPending,
+							message.conversation.id,
 						),
 					});
 					break;
@@ -845,6 +720,10 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 								pendingPrompt: message.conversationId
 									? current.pendingPrompt
 									: null,
+								configPending: withoutPending(
+									current.configPending,
+									conversationId,
+								),
 							};
 						});
 					} else {
@@ -927,7 +806,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							),
 						};
 					});
-					get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+					client(get().send).listConversations();
 					break;
 				}
 				case "turn_error": {
@@ -951,7 +830,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							),
 						};
 					});
-					get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+					client(get().send).listConversations();
 					break;
 				}
 				case "turn_cancelled": {
@@ -977,7 +856,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							),
 						};
 					});
-					get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+					client(get().send).listConversations();
 					break;
 				}
 				case "accepted":
@@ -989,11 +868,11 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							view: "list",
 							recordingShortcut: false,
 						});
-					get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+					client(get().send).listConversations();
 					break;
 				}
 				case "reverted":
-					get().send({ v: PROTOCOL_VERSION, type: "list_conversations" });
+					client(get().send).listConversations();
 					break;
 				case "error": {
 					const settingsRequestActive =

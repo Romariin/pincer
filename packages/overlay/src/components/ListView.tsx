@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { PROTOCOL_VERSION } from "@pincer/core";
 import type { ConversationSummary } from "@pincer/core";
 import { usePincerStore } from "@/state/store";
 import { harnessInfo, modelLabel } from "@/lib/harness";
@@ -26,7 +25,8 @@ function groupLabel(ts: number): (typeof GROUP_ORDER)[number] {
 
 function Row({ c }: { c: ConversationSummary }): ReactNode {
 	const harnessMap = usePincerStore((s) => s.harnessMap);
-	const send = usePincerStore((state) => state.send);
+	const openConversation = usePincerStore((state) => state.openConversation);
+	const deleteConversation = usePincerStore((state) => state.deleteConversation);
 	const optimisticTitle = usePincerStore((state) => {
 		const messages = state.threads[c.id]?.messages;
 		if (!messages) return "";
@@ -47,20 +47,13 @@ function Row({ c }: { c: ConversationSummary }): ReactNode {
 					? "Queued"
 					: `Queued #${c.queuePosition}`
 				: null;
-	const openConversation = (): void => {
-		send({
-			v: PROTOCOL_VERSION,
-			type: "resume_conversation",
-			conversationId: c.id,
-		});
-	};
 
 	return (
 		<div className="group flex cursor-pointer items-center gap-[11px] rounded-[9px] p-2.5 transition-colors hover:bg-muted">
 			<button
 				type="button"
 				className="flex min-w-0 flex-1 items-center gap-[11px] text-left"
-				onClick={openConversation}
+				onClick={() => openConversation(c.id)}
 			>
 				<Avatar info={info} size={28} />
 				<div className="min-w-0 flex-1">
@@ -93,11 +86,7 @@ function Row({ c }: { c: ConversationSummary }): ReactNode {
 				onClick={(e) => {
 					e.preventDefault();
 					e.stopPropagation();
-					send({
-						v: PROTOCOL_VERSION,
-						type: "delete_conversation",
-						conversationId: c.id,
-					});
+					deleteConversation(c.id);
 				}}
 			>
 				<Trash2Icon />
