@@ -118,16 +118,28 @@ async function runCatalogInvocation(
 		stdin: invocation.stdin === undefined ? "ignore" : "pipe",
 		stdout: "pipe",
 		stderr: "ignore",
-		signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS),
+		detached: process.platform !== "win32",
 	});
+	let timedOut = false;
+	let cancellation: Promise<void> | null = null;
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		cancellation = stopProcessTree(proc);
+	}, CATALOG_TIMEOUT_MS);
 	if (invocation.stdin !== undefined && proc.stdin) {
 		proc.stdin.write(invocation.stdin);
 		proc.stdin.end();
 	}
-	const stdout = await readTextTail(proc.stdout, MAX_CATALOG_CHARS);
-	if ((await proc.exited) !== 0)
-		throw new Error("Harness catalog command failed");
-	return stdout;
+	try {
+		const stdout = await readTextTail(proc.stdout, MAX_CATALOG_CHARS);
+		const exitCode = await proc.exited;
+		if (cancellation) await cancellation;
+		if (timedOut) throw new Error("Harness catalog command timed out");
+		if (exitCode !== 0) throw new Error("Harness catalog command failed");
+		return stdout;
+	} finally {
+		clearTimeout(timeout);
+	}
 }
 
 function diagnostic(error: unknown): string {
@@ -150,9 +162,21 @@ export class HarnessRunner {
 				cmd: [...command, ...definition.probeArgs],
 				stdout: "ignore",
 				stderr: "ignore",
-				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+				detached: process.platform !== "win32",
 			});
-			return (await proc.exited) === 0;
+			let timedOut = false;
+			let cancellation: Promise<void> | null = null;
+			const timeout = setTimeout(() => {
+				timedOut = true;
+				cancellation = stopProcessTree(proc);
+			}, PROBE_TIMEOUT_MS);
+			try {
+				const exitCode = await proc.exited;
+				if (cancellation) await cancellation;
+				return !timedOut && exitCode === 0;
+			} finally {
+				clearTimeout(timeout);
+			}
 		} catch {
 			return false;
 		}
@@ -224,7 +248,14 @@ export class HarnessRunner {
 				};
 			}
 		}
-		return { definition, command, detected, catalog, models };
+		return {
+			definition,
+			command,
+			runtime: { projectRoot: context.projectRoot, env: { ...context.env } },
+			detected,
+			catalog,
+			models,
+		};
 	}
 
 	start(
@@ -293,7 +324,7 @@ export class HarnessRunner {
 				const proc = Bun.spawn({
 					cmd: invocation.argv,
 					cwd: request.projectRoot,
-					env: process.env,
+					env: installed.runtime?.env ?? process.env,
 					stdin: invocation.stdin === undefined ? "ignore" : "pipe",
 					stdout: "pipe",
 					stderr: "pipe",

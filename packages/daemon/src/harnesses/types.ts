@@ -62,6 +62,7 @@ export interface HarnessDefinition {
 export interface InstalledHarness {
 	definition: HarnessDefinition;
 	command: string[];
+	runtime?: HarnessRuntimeContext;
 	detected: boolean;
 	catalog: HarnessCatalogState;
 	models: HarnessModel[];

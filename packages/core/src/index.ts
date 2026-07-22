@@ -3,3 +3,4 @@ export * from "./source";
 export * from "./dom";
 export * from "./protocol";
 export * from "./clientMessage";
+export * from "./serverMessage";

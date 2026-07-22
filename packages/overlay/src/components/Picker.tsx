@@ -11,6 +11,7 @@ import {
 	harnessInfo,
 	modelEfforts,
 	modelLabel,
+	modelPickerOptions,
 } from "@/lib/harness";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
@@ -107,15 +108,20 @@ function ModelCombobox({ container }: { container: Container }): ReactNode {
 	const choose = usePincerStore((s) => s.choose);
 	const cfg = useCfg();
 	const info = harnessInfo(harnessMap, cfg.harnessId);
-	const models = info.models;
+	const [query, setQuery] = useState("");
+	const models = modelPickerOptions(info.models, cfg.model, query);
 	const value = models.find((m) => m.id === cfg.model) ?? null;
 
 	return (
 		<Combobox
 			items={models}
 			value={value}
+			onInputValueChange={(input) => setQuery(input)}
 			onValueChange={(model: HarnessModel | null) => {
-				if (model) choose("model", model.id);
+				if (model) {
+					choose("model", model.id);
+					setQuery("");
+				}
 			}}
 			itemToStringLabel={(model: HarnessModel) => model.label}
 			itemToStringValue={(model: HarnessModel) => model.label}
@@ -261,7 +267,7 @@ export function Picker({ container }: { container: Container }): ReactNode {
 					<Section label="HARNESS">
 						<HarnessCombobox container={container} />
 					</Section>
-					{info.capabilities.model && info.models.length > 0 ? (
+					{info.capabilities.model ? (
 						<Section label="MODEL">
 							<ModelCombobox container={container} />
 						</Section>

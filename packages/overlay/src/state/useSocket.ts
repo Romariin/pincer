@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { ClientMessage, ServerMessage } from "@pincer/core";
+import { parseServerMessage, type ClientMessage } from "@pincer/core";
 import { usePincerStore } from "./store";
 import { PincerClient } from "./transport";
 
@@ -57,30 +57,60 @@ export function useSocket(): void {
 				return;
 			}
 			ws = socket;
+			let welcomed = false;
+			let reconnectAllowed = true;
 			socket.addEventListener("open", () => {
-				backoff = 500;
-				setConnected(true);
 				prepareSettings(appRoot, appOrigin, identityError);
-				client.listConversations();
-				const current = usePincerStore.getState();
-				if (current.view === "chat" && current.conversationId) {
-					client.resumeConversation(current.conversationId);
-				}
-				if (appRoot && appOrigin) {
-					client.getOverlaySettings(appRoot, appOrigin);
-				}
 			});
 			socket.addEventListener("message", (ev: MessageEvent) => {
+				let parsed: ReturnType<typeof parseServerMessage>;
 				try {
-					applyServerMessage(JSON.parse(String(ev.data)) as ServerMessage);
+					parsed = parseServerMessage(JSON.parse(String(ev.data)));
 				} catch {
-					/* ignore malformed frames */
+					console.error("Rejected daemon frame: invalid JSON");
+					reconnectAllowed = false;
+					socket.close(1002, "Invalid daemon frame");
+					return;
 				}
+				if (!parsed.ok) {
+					console.error(`Rejected daemon frame: ${parsed.error}`);
+					reconnectAllowed = false;
+					socket.close(1002, "Invalid daemon frame");
+					return;
+				}
+				if (!welcomed) {
+					if (parsed.value.type !== "welcome") {
+						console.error("Rejected daemon frame: welcome required");
+						reconnectAllowed = false;
+						socket.close(1002, "Welcome required");
+						return;
+					}
+					welcomed = true;
+					backoff = 500;
+					setConnected(true);
+					applyServerMessage(parsed.value);
+					client.listConversations();
+					const current = usePincerStore.getState();
+					if (current.view === "chat" && current.conversationId) {
+						client.resumeConversation(current.conversationId);
+					}
+					if (appRoot && appOrigin) {
+						client.getOverlaySettings(appRoot, appOrigin);
+					}
+					return;
+				}
+				if (parsed.value.type === "welcome") {
+					console.error("Rejected daemon frame: duplicate welcome");
+					reconnectAllowed = false;
+					socket.close(1002, "Duplicate welcome");
+					return;
+				}
+				applyServerMessage(parsed.value);
 			});
 			socket.addEventListener("close", () => {
 				ws = null;
 				setConnected(false);
-				scheduleReconnect();
+				if (reconnectAllowed) scheduleReconnect();
 			});
 			socket.addEventListener("error", () => socket.close());
 		};

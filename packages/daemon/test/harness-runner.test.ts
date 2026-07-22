@@ -477,7 +477,7 @@ test("installation probes and catalogs in the target project with the supplied e
 	const recordPath = join(root, "record.json");
 	writeFileSync(planPath, JSON.stringify({ rawLines: [JSON.stringify({ models: [] })] }));
 
-	await HarnessRunner.install(
+	const installed = await HarnessRunner.install(
 		definition,
 		["bun", FAKE_RUNNER, planPath, recordPath],
 		{
@@ -490,6 +490,82 @@ test("installation probes and catalogs in the target project with the supplied e
 		cwd: realpathSync(root),
 		envMarker: "target-environment",
 	});
+
+	writeFileSync(
+		planPath,
+		JSON.stringify({
+			records: [
+				{
+					type: "batch",
+					events: [{ kind: "result", success: true, summary: "done" }],
+				},
+			],
+		}),
+	);
+	await new HarnessRunner().start(installed, request({ projectRoot: root }), () => {})
+		.outcome;
+	expect(JSON.parse(readFileSync(recordPath, "utf8"))).toMatchObject({
+		envMarker: "target-environment",
+	});
+});
+
+test("a timed-out probe terminates its descendant process group", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-probe-timeout-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(
+		planPath,
+		JSON.stringify({ childPidFile, waitFor: join(root, "never") }),
+	);
+
+	const detected = await HarnessRunner.detect(
+		definition,
+		["bun", FAKE_RUNNER, planPath, recordPath],
+		{ projectRoot: root, env: process.env },
+	);
+
+	expect(detected).toBe(false);
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+	expect(processIsRunning(childPid)).toBe(false);
+});
+
+test("a timed-out catalog terminates its descendant process group", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-catalog-timeout-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(
+		planPath,
+		JSON.stringify({ childPidFile, waitFor: join(root, "never") }),
+	);
+	const timeoutDefinition: HarnessDefinition = {
+		...definition,
+		catalog: {
+			models: {
+				build() {
+					return { argv: ["bun", FAKE_RUNNER, planPath, recordPath] };
+				},
+				decode() {
+					return [];
+				},
+			},
+		},
+	};
+
+	const installed = await HarnessRunner.install(
+		timeoutDefinition,
+		["bun", "-e", "process.exit(0)"],
+		{ projectRoot: root, env: process.env },
+	);
+
+	expect(installed.detected).toBe(true);
+	expect(installed.catalog).toMatchObject({ status: "failed" });
+	expect(installed.catalog.diagnostics.join(" ")).toContain("timed out");
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+	expect(processIsRunning(childPid)).toBe(false);
 });
 
 test("installation normalizes and deduplicates advisory model records", async () => {

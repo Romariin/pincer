@@ -333,6 +333,8 @@ export type ServerMessage =
 	| {
 			v: number;
 			type: "error";
+			conversationId?: string;
+			requestType?: ClientMessageType;
 			code?:
 				| "merge_conflict"
 				| "unknown_conversation"

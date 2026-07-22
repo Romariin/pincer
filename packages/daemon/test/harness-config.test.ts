@@ -240,3 +240,27 @@ test("set_config changes subsequent turn selection and deleting the conversation
 		),
 	).toBe(false);
 });
+
+test("changing Harness resets omitted vendor-specific model and effort values", async () => {
+	harness = await createHarness({ enableFakeClaude: true });
+	await harness.next("welcome");
+	harness.send({
+		v: V,
+		type: "new_conversation",
+		harnessId: "omp",
+		model: "omp/model",
+		effort: "omp-effort",
+	});
+	const started = await harness.next("conversation_started");
+
+	harness.send({
+		v: V,
+		type: "set_config",
+		conversationId: started.conversation.id,
+		harnessId: "claude-code",
+	});
+
+	expect(await harness.next("config_updated")).toMatchObject({
+		conversation: { harnessId: "claude-code", model: "", effort: "" },
+	});
+});

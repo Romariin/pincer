@@ -253,10 +253,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		});
 	};
 
-	const noteVisibleConversation = (text: string): void => {
-		const state = get();
-		if (state.view !== "chat" || !state.conversationId) return;
-		const conversationId = state.conversationId;
+	const noteConversation = (conversationId: string, text: string): void => {
 		set((current) => {
 			const thread = current.threads[conversationId] ?? emptyThread();
 			return {
@@ -266,6 +263,12 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				},
 			};
 		});
+	};
+
+	const noteVisibleConversation = (text: string): void => {
+		const state = get();
+		if (state.view !== "chat" || !state.conversationId) return;
+		noteConversation(state.conversationId, text);
 	};
 
 	return {
@@ -875,6 +878,14 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 					client(get().send).listConversations();
 					break;
 				case "error": {
+					if (message.conversationId && message.requestType === "set_config") {
+						set({
+							configPending: withoutPending(
+								state.configPending,
+								message.conversationId,
+							),
+						});
+					}
 					const settingsRequestActive =
 						state.settingsPending ||
 						(!state.settingsLoaded &&
@@ -890,6 +901,8 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							settingsError: message.message,
 							recordingShortcut: false,
 						});
+					} else if (message.conversationId) {
+						noteConversation(message.conversationId, message.message);
 					} else {
 						noteVisibleConversation(message.message);
 					}

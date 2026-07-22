@@ -77,7 +77,6 @@ test("malformed WebSocket messages are rejected before dispatch", async () => {
 	harness = await createHarness();
 	await harness.next("welcome");
 	const malformed: unknown[] = [
-		{ v: V + 1, type: "new_conversation" },
 		{ v: V, type: "new_conversation", harnessId: 12 },
 		{ v: V, type: "resume_conversation", conversationId: null },
 		{
@@ -105,6 +104,23 @@ test("malformed WebSocket messages are rejected before dispatch", async () => {
 	harness.send({ v: V, type: "list_conversations" });
 	expect((await harness.next("conversations")).items).toEqual([]);
 	expect(harness.invocations()).toEqual([]);
+});
+
+test("an incompatible client protocol closes the socket", async () => {
+	harness = await createHarness();
+	await harness.next("welcome");
+	const socket = new WebSocket(`ws://127.0.0.1:${harness.port}`);
+	await new Promise<void>((resolve, reject) => {
+		socket.addEventListener("open", () => resolve(), { once: true });
+		socket.addEventListener("error", () => reject(new Error("WebSocket failed")), {
+			once: true,
+		});
+	});
+	const closed = new Promise<CloseEvent>((resolve) =>
+		socket.addEventListener("close", resolve, { once: true }),
+	);
+	socket.send(JSON.stringify({ v: V + 1, type: "list_conversations" }));
+	expect((await closed).code).toBe(1002);
 });
 
 test("an explicit unknown or unavailable Harness blocks instead of falling back to detected OMP", async () => {

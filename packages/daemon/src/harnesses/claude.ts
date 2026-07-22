@@ -45,10 +45,14 @@ function decodeModels(stdout: string): HarnessModel[] {
 
 		const response = record(message.response);
 		if (response?.request_id !== CATALOG_REQUEST_ID) continue;
-		if (response.subtype !== "success") return [];
+		if (response.subtype !== "success") {
+			throw new Error("Claude catalog initialization failed");
+		}
 
 		const payload = record(response.response);
-		if (!Array.isArray(payload?.models)) return [];
+		if (!Array.isArray(payload?.models)) {
+			throw new Error("Claude catalog response is malformed");
+		}
 
 		const models = new Map<string, HarnessModel>();
 		for (const value of payload.models) {
@@ -57,7 +61,7 @@ function decodeModels(stdout: string): HarnessModel[] {
 		}
 		return [...models.values()];
 	}
-	return [];
+	throw new Error("Claude catalog response was not received");
 }
 
 function catalogInvocation(command: string[]) {

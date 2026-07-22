@@ -5,23 +5,24 @@ plain English, and your **already-installed CLI coding agent** (Claude Code
 first) edits the real source — the dev server's HMR renders it. Pincer is
 bring-your-own-agent: it never embeds a model or takes an API key.
 
-Each conversation lives on its own git branch; every turn is a git checkpoint,
-so any change is revertable, acceptable (merge to base), or discardable.
+Pincer edits the current worktree directly so the dev server's HMR can render each
+change immediately. Conversations and turn output are persisted locally for
+continuity; use your editor or Git to inspect and undo source changes.
 
 ## Requirements
 
 - [Bun](https://bun.sh) ≥ 1.3 (the required runtime and package manager)
 - `git` on `PATH`
-- A supported CLI agent for the actual edits (Claude Code); without one, Pincer
-  runs but reports `agent none` and blocks prompts.
+- A supported CLI Harness for the actual edits; without one, Pincer runs but
+  reports `agent none` and blocks prompts.
 
 ## Layout
 
 | Package | Role |
 | --- | --- |
 | `@pincer/core` | Runtime-neutral shared types + version constants; the two contracts and the WS protocol |
-| `@pincer/daemon` | Bun process: WebSocket server, git checkpointing, `bun:sqlite` history, agent spawning; ships as the `pincer` binary |
-| `@pincer/overlay` | Dependency-free vanilla-TS overlay injected into the preview page |
+| `@pincer/daemon` | Bun process: WebSocket server, direct source editing, `bun:sqlite` history, Harness spawning; ships as the `pincer` binary |
+| `@pincer/overlay` | React-based overlay injected into the preview page; validates daemon frames and manages conversation state |
 | `@pincer/vite-react` | Vite + React adapter (Contract A): tags host DOM elements with their source location and injects the overlay |
 
 ## Quick start

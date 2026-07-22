@@ -32,7 +32,7 @@ export interface OrchestratorDeps {
 }
 
 const NO_HARNESS_HINT =
-	"No coding Harness is available. Install Claude Code, Codex, or OMP, or configure a Harness command.";
+	"No coding Harness is available. Install or configure at least one supported CLI Harness.";
 
 /** Composes persistence, HarnessRunner, and TurnScheduler for direct-edit conversations. */
 export class Orchestrator {
@@ -131,7 +131,7 @@ export class Orchestrator {
 
 	resumeConversation(id: string): ServerMessage {
 		const conversation = this.store.getConversation(id);
-		if (!conversation) return this.unknownConversation();
+		if (!conversation) return this.unknownConversation(id);
 		return {
 			v: PROTOCOL_VERSION,
 			type: "conversation_resumed",
@@ -143,7 +143,7 @@ export class Orchestrator {
 
 	setConfig(conversationId: string, config: ConversationConfig): ServerMessage {
 		const conversation = this.store.getConversation(conversationId);
-		if (!conversation) return this.unknownConversation();
+		if (!conversation) return this.unknownConversation(conversationId);
 		if (this.scheduler.hasOutstanding(conversationId)) {
 			return {
 				v: PROTOCOL_VERSION,
@@ -166,9 +166,13 @@ export class Orchestrator {
 		}
 
 		const patch: { harness_id?: string; model?: string; effort?: string } = {};
+		const harnessChanged =
+			config.harnessId !== undefined && config.harnessId !== conversation.harness_id;
 		if (config.harnessId !== undefined) patch.harness_id = config.harnessId;
 		if (config.model !== undefined) patch.model = config.model;
+		else if (harnessChanged) patch.model = "";
 		if (config.effort !== undefined) patch.effort = config.effort;
+		else if (harnessChanged) patch.effort = "";
 		this.store.setConversationConfig(conversationId, patch);
 		const updated = this.store.getConversation(conversationId);
 		if (!updated)
@@ -190,7 +194,7 @@ export class Orchestrator {
 		elements: PromptElement[],
 	): ServerMessage | null {
 		const conversation = this.store.getConversation(conversationId);
-		if (!conversation) return this.unknownConversation();
+		if (!conversation) return this.unknownConversation(conversationId);
 		if (this.scheduler.hasOutstanding(conversationId)) {
 			return {
 				v: PROTOCOL_VERSION,
@@ -237,7 +241,7 @@ export class Orchestrator {
 
 	async deleteConversation(conversationId: string): Promise<ServerMessage> {
 		const conversation = this.store.getConversation(conversationId);
-		if (!conversation) return this.unknownConversation();
+		if (!conversation) return this.unknownConversation(conversationId);
 		await this.scheduler.cancel(conversationId);
 		this.store.deleteConversation(conversationId);
 		return { v: PROTOCOL_VERSION, type: "deleted", conversationId };
@@ -249,7 +253,7 @@ export class Orchestrator {
 
 	async revert(conversationId: string): Promise<ServerMessage> {
 		if (!this.store.getConversation(conversationId))
-			return this.unknownConversation();
+			return this.unknownConversation(conversationId);
 		return {
 			v: PROTOCOL_VERSION,
 			type: "error",
@@ -260,7 +264,7 @@ export class Orchestrator {
 
 	async accept(conversationId: string): Promise<ServerMessage> {
 		if (!this.store.getConversation(conversationId))
-			return this.unknownConversation();
+			return this.unknownConversation(conversationId);
 		this.store.setConversationStatus(conversationId, "accepted");
 		return {
 			v: PROTOCOL_VERSION,
@@ -272,7 +276,7 @@ export class Orchestrator {
 
 	async discard(conversationId: string): Promise<ServerMessage> {
 		if (!this.store.getConversation(conversationId))
-			return this.unknownConversation();
+			return this.unknownConversation(conversationId);
 		this.store.setConversationStatus(conversationId, "discarded");
 		return { v: PROTOCOL_VERSION, type: "discarded", conversationId };
 	}
@@ -498,10 +502,11 @@ export class Orchestrator {
 		};
 	}
 
-	private unknownConversation(): ServerMessage {
+	private unknownConversation(conversationId?: string): ServerMessage {
 		return {
 			v: PROTOCOL_VERSION,
 			type: "error",
+			conversationId,
 			code: "unknown_conversation",
 			message: "Unknown conversation.",
 		};

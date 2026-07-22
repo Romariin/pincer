@@ -762,6 +762,42 @@ describe("conversation config acknowledgements", () => {
 		}
 		expect(sent).toHaveLength(1);
 	});
+
+	test("only a correlated daemon rejection releases its pending config update", () => {
+		resetStore();
+		usePincerStore.setState({ connected: true, send: () => {} });
+		resume(conversation("config"));
+		usePincerStore.getState().updateCfg({ model: "next-model" });
+		expect(usePincerStore.getState().configPending.config).toBe(true);
+
+		apply({
+			v: PROTOCOL_VERSION,
+			type: "error",
+			code: "settings_unavailable",
+			message: "Unrelated failure.",
+		});
+		expect(usePincerStore.getState().configPending.config).toBe(true);
+
+		apply({
+			v: PROTOCOL_VERSION,
+			type: "error",
+			conversationId: "config",
+			requestType: "revert",
+			message: "An unrelated operation failed.",
+		});
+		expect(usePincerStore.getState().configPending.config).toBe(true);
+
+		apply({
+			v: PROTOCOL_VERSION,
+			type: "error",
+			conversationId: "config",
+			requestType: "set_config",
+			code: "unknown_conversation",
+			message: "Configuration was rejected.",
+		});
+
+		expect(usePincerStore.getState().configPending).toEqual({});
+	});
 });
 
 describe("overlay settings acknowledgements", () => {

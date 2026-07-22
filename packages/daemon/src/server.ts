@@ -6,6 +6,7 @@ import {
 	PROTOCOL_VERSION,
 	parseClientMessage,
 	type ClientMessage,
+	type ClientMessageType,
 	type ConversationConfig,
 	type KeyboardShortcut,
 	type OverlaySettings,
@@ -155,6 +156,10 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 				}
 				const result = parseClientMessage(parsed);
 				if (!result.ok) {
+					if (result.error === "Unsupported protocol version.") {
+						ws.close(1002, "Unsupported protocol version");
+						return;
+					}
 					emit({
 						v: PROTOCOL_VERSION,
 						type: "error",
@@ -312,6 +317,23 @@ export function handleSettingsMessage(
 	return true;
 }
 
+function emitResponse(
+	emit: Emit,
+	response: ServerMessage,
+	requestType: ClientMessageType,
+	conversationId?: string,
+): void {
+	if (response.type !== "error") {
+		emit(response);
+		return;
+	}
+	emit({
+		...response,
+		requestType,
+		conversationId: response.conversationId ?? conversationId,
+	});
+}
+
 async function dispatch(
 	orch: Orchestrator,
 	msg: ClientMessage,
@@ -324,16 +346,31 @@ async function dispatch(
 			emit(orch.listConversations());
 			return;
 		case "new_conversation":
-			emit(await orch.newConversation(readConfig(msg)));
+			emitResponse(emit, await orch.newConversation(readConfig(msg)), msg.type);
 			return;
 		case "resume_conversation":
-			emit(orch.resumeConversation(msg.conversationId));
+			emitResponse(
+				emit,
+				orch.resumeConversation(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "set_config":
-			emit(orch.setConfig(msg.conversationId, readConfig(msg)));
+			emitResponse(
+				emit,
+				orch.setConfig(msg.conversationId, readConfig(msg)),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "delete_conversation":
-			emit(await orch.deleteConversation(msg.conversationId));
+			emitResponse(
+				emit,
+				await orch.deleteConversation(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "prompt": {
 			const rejection = orch.submitTurn(
@@ -350,13 +387,28 @@ async function dispatch(
 			await orch.cancel(msg.conversationId);
 			return;
 		case "revert":
-			emit(await orch.revert(msg.conversationId));
+			emitResponse(
+				emit,
+				await orch.revert(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "accept":
-			emit(await orch.accept(msg.conversationId));
+			emitResponse(
+				emit,
+				await orch.accept(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "discard":
-			emit(await orch.discard(msg.conversationId));
+			emitResponse(
+				emit,
+				await orch.discard(msg.conversationId),
+				msg.type,
+				msg.conversationId,
+			);
 			return;
 		case "get_overlay_settings":
 		case "update_overlay_settings":
