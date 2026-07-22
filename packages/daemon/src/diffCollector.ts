@@ -67,16 +67,16 @@ export function collectNewDiffEvents(
 }
 
 export interface DiffSource {
-	rawDiff(): Promise<string>;
+	rawDiff(paths?: string[], signal?: AbortSignal): Promise<string>;
 }
 
 export class GitDiffCollector {
 	constructor(private readonly source: DiffSource) {}
 
-	async snapshot(): Promise<Map<string, DiffHunk[]>> {
+	async snapshot(signal?: AbortSignal): Promise<Map<string, DiffHunk[]>> {
 		try {
 			return new Map(
-				parseUnifiedDiff(await this.source.rawDiff()).map((event) => [
+				parseUnifiedDiff(await this.source.rawDiff([], signal)).map((event) => [
 					event.file,
 					event.hunks,
 				]),
@@ -86,9 +86,15 @@ export class GitDiffCollector {
 		}
 	}
 
-	async collect(before: ReadonlyMap<string, readonly DiffHunk[]>): Promise<DiffEvent[]> {
+	async collect(
+		before: ReadonlyMap<string, readonly DiffHunk[]>,
+		signal?: AbortSignal,
+	): Promise<DiffEvent[]> {
 		try {
-			return collectNewDiffEvents(before, await this.source.rawDiff());
+			return collectNewDiffEvents(
+				before,
+				await this.source.rawDiff([], signal),
+			);
 		} catch {
 			return [];
 		}

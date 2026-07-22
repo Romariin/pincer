@@ -1,10 +1,10 @@
 import {
-	PROTOCOL_VERSION,
 	type ConversationConfig,
 	type ConversationSummary,
 	type DomContext,
 	type LiveTurnSnapshot,
 	type MessageBlock,
+	PROTOCOL_VERSION,
 	type PromptElement,
 	type ServerMessage,
 	type SourceLocation,
@@ -15,8 +15,8 @@ import type { Git } from "./git";
 import { HarnessRunner } from "./harnesses/runner";
 import type { InstalledHarness } from "./harnesses/types";
 import type { ConversationRow, Store, TurnRow } from "./store";
-import { TurnScheduler } from "./turnScheduler";
 import type { TurnExecutionControls, TurnSubmission } from "./turnScheduler";
+import { TurnScheduler } from "./turnScheduler";
 
 export type Emit = (message: ServerMessage) => void;
 
@@ -167,7 +167,8 @@ export class Orchestrator {
 
 		const patch: { harness_id?: string; model?: string; effort?: string } = {};
 		const harnessChanged =
-			config.harnessId !== undefined && config.harnessId !== conversation.harness_id;
+			config.harnessId !== undefined &&
+			config.harnessId !== conversation.harness_id;
 		if (config.harnessId !== undefined) patch.harness_id = config.harnessId;
 		if (config.model !== undefined) patch.model = config.model;
 		else if (harnessChanged) patch.model = "";
@@ -345,7 +346,11 @@ export class Orchestrator {
 				`Harness became unavailable: ${submission.selection.harnessId}`,
 			);
 
-		const beforeDiff = await this.diffCollector.snapshot();
+		const beforeDiffAbort = new AbortController();
+		controls.setCancel(async () => beforeDiffAbort.abort());
+		const beforeDiff = await this.diffCollector.snapshot(
+			beforeDiffAbort.signal,
+		);
 		const turns = this.store.getTurns(submission.conversationId);
 		let resumeToken: string | null = null;
 		if (harness.definition.capabilities.resume) {
@@ -444,10 +449,20 @@ export class Orchestrator {
 			return;
 		}
 
-		for (const diff of await this.diffCollector.collect(beforeDiff))
+		const afterDiffAbort = new AbortController();
+		controls.setCancel(async () => afterDiffAbort.abort());
+		for (const diff of await this.diffCollector.collect(
+			beforeDiff,
+			afterDiffAbort.signal,
+		))
 			controls.event(diff);
 		if (controls.cancellationRequested) {
-			this.store.setTurnStatus(turnId, "cancelled");
+			const snapshot = controls.snapshot();
+			this.store.updateTurn(turnId, {
+				output: outputFromBlocks(snapshot.blocks),
+				blocks: JSON.stringify(snapshot.blocks),
+				status: "cancelled",
+			});
 			this.publish({
 				v: PROTOCOL_VERSION,
 				type: "turn_cancelled",

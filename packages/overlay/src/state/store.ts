@@ -1,6 +1,3 @@
-import { create } from "zustand";
-import { useShallow } from "zustand/react/shallow";
-import { DEFAULT_TOGGLE_SHORTCUT } from "@pincer/core";
 import type {
 	ClientMessage,
 	ConversationSummary,
@@ -13,31 +10,33 @@ import type {
 	SourceLocation,
 	TurnState,
 } from "@pincer/core";
-import { harnessInfo } from "@/lib/harness";
+import { DEFAULT_TOGGLE_SHORTCUT } from "@pincer/core";
+import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { buildDomContext, resolveSource } from "@/dom/picker";
-import { PincerClient } from "./transport";
+import { harnessInfo } from "@/lib/harness";
 import {
 	assistantMsg,
+	type Cfg,
+	type ConversationThread,
 	conversationCfg,
 	emptyThread,
 	finishThread,
+	type Msg,
 	mergeLiveTurn,
 	replaceConversation,
 	updateConversationTurnState,
 	upsertConversation,
 	userMsg,
 	withSystemNote,
-	type Cfg,
-	type ConversationThread,
-	type Msg,
 } from "./thread";
+import { PincerClient } from "./transport";
 
 export type { Cfg, ConversationThread, Msg } from "./thread";
 
 export type View = "list" | "chat" | "settings";
 export type PickerKind = "harness" | "model" | "effort";
 export type ReferenceCopyStatus = "idle" | "selecting" | "copied" | "error";
-
 
 export interface Selection {
 	id: number;
@@ -69,7 +68,6 @@ function withoutPending(
 	delete next[conversationId];
 	return next;
 }
-
 
 export interface PincerStore {
 	// ---- connection / view ----
@@ -162,7 +160,6 @@ export function computeCfg(s: PincerStore): Cfg {
 	}
 	return { ...s.draft };
 }
-
 
 export const usePincerStore = create<PincerStore>()((set, get) => {
 	const appendText = (
@@ -312,6 +309,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 							settingsPending: false,
 							recordingShortcut: false,
 							configPending: {},
+							pendingPrompt: null,
 						},
 			),
 
@@ -406,7 +404,11 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				settingsError: null,
 				recordingShortcut: false,
 			});
-			client(state.send).updateShortcut(state.appRoot, state.appOrigin, shortcut);
+			client(state.send).updateShortcut(
+				state.appRoot,
+				state.appOrigin,
+				shortcut,
+			);
 		},
 		updateShowFloatingButton: (showFloatingButton) => {
 			const state = get();
@@ -456,6 +458,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 			const state = get();
 			const current = computeCfg(state);
 			if (kind === "harness") {
+				if (!state.harnessMap[value]?.detected) return;
 				const patch: Partial<Cfg> = { harnessId: value };
 				if (value !== current.harnessId) {
 					patch.model = "";
@@ -544,7 +547,12 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		},
 		submitPrompt: (payload) => {
 			const state = get();
-			if (!state.connected || selectVisibleTurnState(state) !== "idle") return;
+			if (
+				!state.connected ||
+				state.pendingPrompt !== null ||
+				selectVisibleTurnState(state) !== "idle"
+			)
+				return;
 			if (state.view === "chat" && state.conversationId) {
 				state.queueUserMessage(
 					state.conversationId,
@@ -582,9 +590,12 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 						defaultHarnessId.length > 0
 							? harnessMap[state.draft.harnessId]
 							: undefined;
-					const harnessId = retained ? state.draft.harnessId : defaultHarnessId;
-					const model = retained ? state.draft.model : "";
-					const effort = retained ? state.draft.effort : "";
+					const retainDraft = retained?.detected === true;
+					const harnessId = retainDraft
+						? state.draft.harnessId
+						: defaultHarnessId;
+					const model = retainDraft ? state.draft.model : "";
+					const effort = retainDraft ? state.draft.effort : "";
 					set({
 						harnesses: message.harnesses,
 						harnessMap,
@@ -650,7 +661,8 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 						)
 							continue;
 						messages.push(userMsg(turn.prompt, 0));
-						if (turn.blocks.length) messages.push(assistantMsg(turn.blocks, cfg));
+						if (turn.blocks.length)
+							messages.push(assistantMsg(turn.blocks, cfg));
 					}
 					let thread: ConversationThread = { ...emptyThread(), messages };
 					if (message.liveTurn)
@@ -736,40 +748,38 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				}
 				case "turn_queued": {
 					const conversationId = message.conversationId;
-					set((current) => ({
-						threads: {
-							...current.threads,
-							[conversationId]: mergeLiveTurn(
-								current.threads[conversationId] ?? emptyThread(),
-								message.liveTurn,
+					set((current) => {
+						const thread = current.threads[conversationId] ?? emptyThread();
+						const next = mergeLiveTurn(thread, message.liveTurn);
+						if (next === thread) return current;
+						return {
+							threads: { ...current.threads, [conversationId]: next },
+							conversations: updateConversationTurnState(
+								current.conversations,
+								conversationId,
+								"queued",
+								message.liveTurn.queuePosition,
 							),
-						},
-						conversations: updateConversationTurnState(
-							current.conversations,
-							conversationId,
-							"queued",
-							message.liveTurn.queuePosition,
-						),
-					}));
+						};
+					});
 					break;
 				}
 				case "turn_started": {
 					const conversationId = message.conversationId;
-					set((current) => ({
-						threads: {
-							...current.threads,
-							[conversationId]: mergeLiveTurn(
-								current.threads[conversationId] ?? emptyThread(),
-								message.liveTurn,
+					set((current) => {
+						const thread = current.threads[conversationId] ?? emptyThread();
+						const next = mergeLiveTurn(thread, message.liveTurn);
+						if (next === thread) return current;
+						return {
+							threads: { ...current.threads, [conversationId]: next },
+							conversations: updateConversationTurnState(
+								current.conversations,
+								conversationId,
+								"running",
+								null,
 							),
-						},
-						conversations: updateConversationTurnState(
-							current.conversations,
-							conversationId,
-							"running",
-							null,
-						),
-					}));
+						};
+					});
 					break;
 				}
 				case "harness_output": {
@@ -816,7 +826,12 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 					const conversationId = message.conversationId;
 					set((current) => {
 						const thread = current.threads[conversationId] ?? emptyThread();
-						if (thread.turnId !== message.turnId) return current;
+						if (
+							thread.turnState === "idle" ||
+							message.turnId === null ||
+							thread.turnId !== message.turnId
+						)
+							return current;
 						return {
 							threads: {
 								...current.threads,
@@ -878,6 +893,12 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 					client(get().send).listConversations();
 					break;
 				case "error": {
+					if (
+						!message.conversationId &&
+						message.requestType === "new_conversation"
+					) {
+						set({ pendingPrompt: null });
+					}
 					if (message.conversationId && message.requestType === "set_config") {
 						set({
 							configPending: withoutPending(
@@ -885,6 +906,25 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 								message.conversationId,
 							),
 						});
+					}
+					if (message.conversationId && message.requestType === "prompt") {
+						const conversationId = message.conversationId;
+						set((current) => {
+							const thread = current.threads[conversationId] ?? emptyThread();
+							return {
+								threads: {
+									...current.threads,
+									[conversationId]: finishThread(thread),
+								},
+								conversations: updateConversationTurnState(
+									current.conversations,
+									conversationId,
+									"idle",
+									null,
+								),
+							};
+						});
+						client(get().send).listConversations();
 					}
 					const settingsRequestActive =
 						state.settingsPending ||

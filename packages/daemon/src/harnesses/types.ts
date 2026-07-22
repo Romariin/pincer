@@ -70,7 +70,8 @@ export interface InstalledHarness {
 
 export interface HarnessRuntimeContext {
 	projectRoot: string;
-	env: Record<string, string | undefined>;
+	env: NodeJS.ProcessEnv;
+	signal?: AbortSignal;
 }
 
 export interface HarnessRunOutcome {

@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessEvent } from "@pincer/core";
+import { resolveHarnesses } from "../src/harnesses/registry";
 import { HarnessRunner } from "../src/harnesses/runner";
 import type {
 	HarnessDefinition,
@@ -30,7 +31,9 @@ function processIsRunning(pid: number): boolean {
 	}
 	if (process.platform === "win32") return true;
 	const result = Bun.spawnSync(["ps", "-o", "state=", "-p", String(pid)]);
-	return result.exitCode === 0 && !result.stdout.toString().trim().startsWith("Z");
+	return (
+		result.exitCode === 0 && !result.stdout.toString().trim().startsWith("Z")
+	);
 }
 
 afterEach(() => {
@@ -195,13 +198,7 @@ const installationCases: [
 
 test.each(installationCases)(
 	"installer separates CLI availability from the advisory catalog for %s",
-	async (
-		_name,
-		catalogOutput,
-		expectedDetected,
-		expectedCatalogStatus,
-		expectedModels,
-	) => {
+	async (_name, catalogOutput, expectedDetected, expectedCatalogStatus, expectedModels) => {
 		let command: string[];
 		if (catalogOutput === null) {
 			command = [`pincer-test-missing-runner-${crypto.randomUUID()}`];
@@ -234,7 +231,10 @@ test("installer marks an omitted advisory catalog as unsupported without hiding 
 	const planPath = join(root, "plan.json");
 	const recordPath = join(root, "record.json");
 	writeFileSync(planPath, JSON.stringify({}));
-	const withoutCatalog: HarnessDefinition = { ...definition, catalog: undefined };
+	const withoutCatalog: HarnessDefinition = {
+		...definition,
+		catalog: undefined,
+	};
 
 	const installed = await HarnessRunner.install(
 		withoutCatalog,
@@ -393,6 +393,44 @@ test("runner discards an oversized NDJSON line and continues at the next record"
 	);
 });
 
+test("a throwing event consumer stops the Harness instead of deadlocking", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-consumer-error-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	writeFileSync(
+		planPath,
+		JSON.stringify({
+			records: [{ type: "batch", events: [{ kind: "status", text: "ready" }] }],
+			waitFor: join(root, "never"),
+		}),
+	);
+	const installed: InstalledHarness = {
+		definition,
+		command: ["bun", FAKE_RUNNER, planPath, recordPath],
+		detected: true,
+		catalog: { status: "ready", diagnostics: [] },
+		models: [],
+	};
+	const running = new HarnessRunner().start(
+		installed,
+		request({ projectRoot: root }),
+		() => {
+			throw new Error("consumer exploded");
+		},
+	);
+	const outcome = await Promise.race([
+		running.outcome,
+		Bun.sleep(2_500).then(() => null),
+	]);
+	if (!outcome) await running.cancel();
+
+	expect(outcome).toMatchObject({
+		status: "failed",
+		summary: expect.stringContaining("consumer exploded"),
+	});
+});
+
 test("runner cancellation terminates the Harness process group, including descendants", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pincer-runner-cancel-"));
 	roots.push(root);
@@ -437,13 +475,25 @@ test("runner cancellation terminates the Harness process group, including descen
 	expect(() => process.kill(childPid, 0)).toThrow();
 });
 
-test("cancellation stops descendants after the Harness leader has already exited", async () => {
+test("a successful Harness run stops descendants before resolving", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pincer-runner-leader-exited-"));
 	roots.push(root);
 	const planPath = join(root, "plan.json");
 	const recordPath = join(root, "record.json");
 	const childPidFile = join(root, "child.pid");
-	writeFileSync(planPath, JSON.stringify({ childPidFile }));
+	writeFileSync(
+		planPath,
+		JSON.stringify({
+			childPidFile,
+			childInheritsOutput: true,
+			records: [
+				{
+					type: "batch",
+					events: [{ kind: "result", success: true, summary: "done" }],
+				},
+			],
+		}),
+	);
 	const installed: InstalledHarness = {
 		definition,
 		command: ["bun", FAKE_RUNNER, planPath, recordPath],
@@ -456,18 +506,41 @@ test("cancellation stops descendants after the Harness leader has already exited
 		request({ projectRoot: root }),
 		() => {},
 	);
-	await running.outcome;
+	expect(await running.outcome).toMatchObject({ status: "succeeded" });
 	const childPid = Number(readFileSync(childPidFile, "utf8"));
-	expect(processIsRunning(childPid)).toBe(true);
+	expect(processIsRunning(childPid)).toBe(false);
+});
 
-	try {
-		await running.cancel();
-		expect(processIsRunning(childPid)).toBe(false);
-	} finally {
-		try {
-			process.kill(childPid, "SIGKILL");
-		} catch {}
-	}
+test("a successful catalog stops inherited-pipe descendants before resolving", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-catalog-leader-exited-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(
+		planPath,
+		JSON.stringify({
+			childPidFile,
+			childInheritsOutput: true,
+			rawLines: [
+				JSON.stringify({
+					models: [{ id: "model", label: "Model", efforts: [] }],
+				}),
+			],
+		}),
+	);
+
+	const installed = await HarnessRunner.install(
+		definition,
+		["bun", FAKE_RUNNER, planPath, recordPath],
+		{ projectRoot: root, env: process.env },
+	);
+
+	expect(installed.models).toEqual([
+		{ id: "model", label: "Model", efforts: [] },
+	]);
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+	expect(processIsRunning(childPid)).toBe(false);
 });
 
 test("installation probes and catalogs in the target project with the supplied environment", async () => {
@@ -475,7 +548,10 @@ test("installation probes and catalogs in the target project with the supplied e
 	roots.push(root);
 	const planPath = join(root, "plan.json");
 	const recordPath = join(root, "record.json");
-	writeFileSync(planPath, JSON.stringify({ rawLines: [JSON.stringify({ models: [] })] }));
+	writeFileSync(
+		planPath,
+		JSON.stringify({ rawLines: [JSON.stringify({ models: [] })] }),
+	);
 
 	const installed = await HarnessRunner.install(
 		definition,
@@ -502,11 +578,116 @@ test("installation probes and catalogs in the target project with the supplied e
 			],
 		}),
 	);
-	await new HarnessRunner().start(installed, request({ projectRoot: root }), () => {})
-		.outcome;
+	await new HarnessRunner().start(
+		installed,
+		request({ projectRoot: root }),
+		() => {},
+	).outcome;
 	expect(JSON.parse(readFileSync(recordPath, "utf8"))).toMatchObject({
 		envMarker: "target-environment",
 	});
+});
+
+test("aborting installation stops an in-flight probe and its descendants", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-probe-abort-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(
+		planPath,
+		JSON.stringify({ childPidFile, waitFor: join(root, "never") }),
+	);
+	const controller = new AbortController();
+	const installation = HarnessRunner.install(
+		definition,
+		["bun", FAKE_RUNNER, planPath, recordPath],
+		{ projectRoot: root, env: process.env, signal: controller.signal },
+	);
+	while (!(await Bun.file(childPidFile).exists())) await Bun.sleep(10);
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+
+	controller.abort();
+
+	await expect(installation).rejects.toThrow("Harness installation aborted");
+	expect(processIsRunning(childPid)).toBe(false);
+});
+
+test("aborting installation stops an in-flight catalog and its descendants", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-runner-catalog-abort-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(
+		planPath,
+		JSON.stringify({ childPidFile, waitFor: join(root, "never") }),
+	);
+	const abortDefinition: HarnessDefinition = {
+		...definition,
+		catalog: {
+			models: {
+				build() {
+					return { argv: ["bun", FAKE_RUNNER, planPath, recordPath] };
+				},
+				decode() {
+					return [];
+				},
+			},
+		},
+	};
+	const controller = new AbortController();
+	const installation = HarnessRunner.install(
+		abortDefinition,
+		["bun", "-e", "process.exit(0)"],
+		{ projectRoot: root, env: process.env, signal: controller.signal },
+	);
+	while (!(await Bun.file(childPidFile).exists())) await Bun.sleep(10);
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+
+	controller.abort();
+
+	await expect(installation).rejects.toThrow("Harness installation aborted");
+	expect(processIsRunning(childPid)).toBe(false);
+});
+
+test("registry abort waits for every Harness installation to clean up", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pincer-registry-abort-"));
+	roots.push(root);
+	const planPath = join(root, "plan.json");
+	const recordPath = join(root, "record.json");
+	const childPidFile = join(root, "child.pid");
+	writeFileSync(
+		planPath,
+		JSON.stringify({ childPidFile, waitFor: join(root, "never") }),
+	);
+	const controller = new AbortController();
+	const resolution = resolveHarnesses({
+		definitions: [
+			{
+				...definition,
+				id: "quick-probe",
+				defaultCommand: ["bun", "-e", "setInterval(() => {}, 1000)"],
+				catalog: undefined,
+			},
+			{
+				...definition,
+				id: "descendant-probe",
+				defaultCommand: ["bun", FAKE_RUNNER, planPath, recordPath],
+				catalog: undefined,
+			},
+		],
+		projectRoot: root,
+		env: process.env,
+		signal: controller.signal,
+	});
+	while (!(await Bun.file(childPidFile).exists())) await Bun.sleep(10);
+	const childPid = Number(readFileSync(childPidFile, "utf8"));
+
+	controller.abort();
+
+	await expect(resolution).rejects.toThrow("Harness installation aborted");
+	expect(processIsRunning(childPid)).toBe(false);
 });
 
 test("a timed-out probe terminates its descendant process group", async () => {

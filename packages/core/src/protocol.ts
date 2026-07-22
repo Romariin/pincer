@@ -1,5 +1,5 @@
-import type { SourceLocation } from "./source";
 import type { DomContext } from "./dom";
+import type { SourceLocation } from "./source";
 
 /** A selectable model exposed by a Harness model catalog. */
 export interface HarnessModel {
@@ -339,6 +339,7 @@ export type ServerMessage =
 				| "merge_conflict"
 				| "unknown_conversation"
 				| "bad_message"
+				| "internal_error"
 				| "settings_unavailable"
 				| "unknown_harness"
 				| "harness_unavailable";

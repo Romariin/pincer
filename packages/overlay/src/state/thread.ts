@@ -72,7 +72,10 @@ export function upsertConversation(
 	conversations: ConversationSummary[],
 	conversation: ConversationSummary,
 ): ConversationSummary[] {
-	return [conversation, ...conversations.filter((item) => item.id !== conversation.id)];
+	return [
+		conversation,
+		...conversations.filter((item) => item.id !== conversation.id),
+	];
 }
 
 export function replaceConversation(
@@ -104,6 +107,14 @@ export function mergeLiveTurn(
 	thread: ConversationThread,
 	liveTurn: LiveTurnSnapshot,
 ): ConversationThread {
+	if (thread.turnState === "running" && liveTurn.state === "queued")
+		return thread;
+	if (
+		thread.liveTurnSeq !== null &&
+		liveTurn.seq !== null &&
+		liveTurn.seq < thread.liveTurnSeq
+	)
+		return thread;
 	let messages = thread.messages;
 	const last = messages[messages.length - 1];
 	const sameLiveTurn =

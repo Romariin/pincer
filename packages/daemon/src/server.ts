@@ -1,22 +1,21 @@
-import type { Server, ServerWebSocket } from "bun";
 import { realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import {
-	MAX_CLIENT_FRAME_BYTES,
-	PROTOCOL_VERSION,
-	parseClientMessage,
 	type ClientMessage,
 	type ClientMessageType,
 	type ConversationConfig,
 	type KeyboardShortcut,
+	MAX_CLIENT_FRAME_BYTES,
 	type OverlaySettings,
+	PROTOCOL_VERSION,
+	parseClientMessage,
 	type ServerMessage,
 } from "@pincer/core";
+import type { Server, ServerWebSocket } from "bun";
 import { Git } from "./git";
-import { Store } from "./store";
 import { harnessDescriptors, resolveHarnesses } from "./harnesses/registry";
-import { Orchestrator } from "./orchestrator";
 import type { Emit } from "./orchestrator";
+import { Orchestrator } from "./orchestrator";
 import {
 	defaultDataRoot,
 	migrateLegacyProjectData,
@@ -25,6 +24,7 @@ import {
 	settingsDbPath,
 } from "./paths";
 import { SettingsStore } from "./settingsStore";
+import { Store } from "./store";
 
 const DAEMON_VERSION = "0.1.0";
 
@@ -46,6 +46,7 @@ export interface DaemonOptions {
 	harnessCommands?: Record<string, string[]>;
 	log?: (message: string) => void;
 	dataRoot?: string;
+	signal?: AbortSignal;
 }
 
 export interface RunningDaemon {
@@ -58,7 +59,7 @@ export interface RunningDaemon {
 export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 	const log = opts.log ?? (() => {});
 	const git = new Git(opts.projectRoot);
-	if (!(await git.isInsideWorkTree())) {
+	if (!(await git.isInsideWorkTree(opts.signal))) {
 		throw new Error(
 			`Not a git repository: ${opts.projectRoot}. Pincer requires a git repo.`,
 		);
@@ -72,6 +73,7 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 		commands: opts.harnessCommands,
 		projectRoot: opts.projectRoot,
 		env: process.env,
+		signal: opts.signal,
 	});
 	const store = new Store(join(pincerDataDir, "history.db"));
 	const settingsStore = new SettingsStore(settingsDbPath(dataRoot));
@@ -168,13 +170,29 @@ export async function startDaemon(opts: DaemonOptions): Promise<RunningDaemon> {
 					});
 					return;
 				}
-				await dispatch(
-					orchestrator,
-					result.value,
-					opts.projectRoot,
-					settingsStore,
-					emit,
-				);
+				try {
+					await dispatch(
+						orchestrator,
+						result.value,
+						opts.projectRoot,
+						settingsStore,
+						emit,
+					);
+				} catch (error) {
+					log(`request failed type=${result.value.type}: ${String(error)}`);
+					const conversationId =
+						"conversationId" in result.value
+							? result.value.conversationId
+							: undefined;
+					emit({
+						v: PROTOCOL_VERSION,
+						type: "error",
+						requestType: result.value.type,
+						...(conversationId === undefined ? {} : { conversationId }),
+						code: "internal_error",
+						message: "Request failed.",
+					});
+				}
 			},
 			close(ws: ServerWebSocket) {
 				subscribers.delete(ws);
@@ -380,7 +398,8 @@ async function dispatch(
 				msg.domContext,
 				msg.elements ?? [],
 			);
-			if (rejection) emit(rejection);
+			if (rejection)
+				emitResponse(emit, rejection, msg.type, msg.conversationId);
 			return;
 		}
 		case "cancel":

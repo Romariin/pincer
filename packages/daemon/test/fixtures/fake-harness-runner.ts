@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
+import { existsSync, writeFileSync } from "node:fs";
 
 interface RunnerPlan {
 	records?: unknown[];
@@ -10,6 +10,7 @@ interface RunnerPlan {
 	waitFor?: string;
 	readyFile?: string;
 	childPidFile?: string;
+	childInheritsOutput?: boolean;
 }
 
 const [planPath, recordPath] = Bun.argv.slice(2);
@@ -35,8 +36,8 @@ await Bun.write(
 if (plan.childPidFile) {
 	const child = Bun.spawn(["bun", "-e", "setInterval(() => {}, 1000)"], {
 		stdin: "ignore",
-		stdout: "ignore",
-		stderr: "ignore",
+		stdout: plan.childInheritsOutput ? "inherit" : "ignore",
+		stderr: plan.childInheritsOutput ? "inherit" : "ignore",
 	});
 	child.unref();
 	writeFileSync(plan.childPidFile, String(child.pid));

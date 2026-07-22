@@ -46,12 +46,40 @@ export function modelPickerOptions(
 		options.splice(1, 0, { id: current, label: current, efforts: [] });
 	}
 	const candidate = custom.trim();
-	if (
-		candidate &&
-		!options.some(
-			(model) => model.id === candidate || model.label === candidate,
-		)
-	) {
+	if (candidate && !options.some((model) => model.id === candidate)) {
+		options.splice(1, 0, {
+			id: candidate,
+			label: `Use “${candidate}”`,
+			efforts: [],
+		});
+	}
+	return options;
+}
+
+export function effortPickerOptions(
+	efforts: readonly string[],
+	current = "",
+	custom = "",
+): HarnessModel[] {
+	const options: HarnessModel[] = [
+		{ id: "", label: "Default", efforts: [] },
+		...efforts
+			.filter((effort) => effort !== "")
+			.map((effort) => ({
+				id: effort,
+				label: effortLabel(effort),
+				efforts: [],
+			})),
+	];
+	if (current && !options.some((option) => option.id === current)) {
+		options.splice(1, 0, {
+			id: current,
+			label: effortLabel(current),
+			efforts: [],
+		});
+	}
+	const candidate = custom.trim();
+	if (candidate && !options.some((option) => option.id === candidate)) {
 		options.splice(1, 0, {
 			id: candidate,
 			label: `Use “${candidate}”`,

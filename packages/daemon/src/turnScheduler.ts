@@ -1,9 +1,9 @@
 import {
-	PROTOCOL_VERSION,
 	type DomContext,
 	type HarnessEvent,
 	type HarnessSelection,
 	type LiveTurnSnapshot,
+	PROTOCOL_VERSION,
 	type PromptElement,
 	type ServerMessage,
 	type SourceLocation,
@@ -91,7 +91,9 @@ export class TurnScheduler {
 				conversationId: submission.conversationId,
 				prompt: submission.prompt,
 				selection: submission.selection,
-				queuePosition: this.queue.length + 1,
+				queuePosition:
+					this.queue.length +
+					(this.active?.buffer.snapshot().state === "queued" ? 2 : 1),
 			}),
 			cancel: null,
 			cancelRequested: false,
@@ -134,7 +136,10 @@ export class TurnScheduler {
 			(scheduled) => scheduled.submission.conversationId === conversationId,
 		);
 		return queued
-			? { state: "queued", queuePosition: queued.buffer.snapshot().queuePosition }
+			? {
+					state: "queued",
+					queuePosition: queued.buffer.snapshot().queuePosition,
+				}
 			: { state: "idle", queuePosition: null };
 	}
 
@@ -205,7 +210,6 @@ export class TurnScheduler {
 		const scheduled = this.queue.shift();
 		if (!scheduled) return;
 		this.active = scheduled;
-		scheduled.buffer.setQueuePosition(null);
 		this.refreshQueuePositions();
 		this.onStateChanged();
 
@@ -215,6 +219,7 @@ export class TurnScheduler {
 			},
 			started: (turnId, seq) => {
 				scheduled.buffer.start(turnId, seq);
+				this.refreshQueuePositions();
 				const liveTurn = scheduled.buffer.snapshot();
 				this.publish({
 					v: PROTOCOL_VERSION,
@@ -243,7 +248,7 @@ export class TurnScheduler {
 					message,
 				);
 				if (scheduled.buffer.snapshot().turnId === null)
-					scheduled.buffer.start(persisted.turnId, persisted.seq);
+					controls.started(persisted.turnId, persisted.seq);
 				this.publish({
 					v: PROTOCOL_VERSION,
 					type: "turn_error",
@@ -261,10 +266,11 @@ export class TurnScheduler {
 	}
 
 	private refreshQueuePositions(): void {
+		const offset = this.active?.buffer.snapshot().state === "queued" ? 1 : 0;
 		for (let index = 0; index < this.queue.length; index += 1) {
 			const scheduled = this.queue[index];
 			if (!scheduled) continue;
-			const queuePosition = index + 1;
+			const queuePosition = index + offset + 1;
 			if (scheduled.buffer.snapshot().queuePosition === queuePosition) continue;
 			scheduled.buffer.setQueuePosition(queuePosition);
 			this.publish({

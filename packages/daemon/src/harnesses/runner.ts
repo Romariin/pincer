@@ -3,8 +3,8 @@ import type {
 	HarnessEvent,
 	HarnessModel,
 } from "@pincer/core";
-import { stopProcessTree } from "../processTree";
 import type { ProcessTreeHandle } from "../processTree";
+import { stopProcessTree } from "../processTree";
 import { normalizeModels } from "./adapter";
 import type {
 	HarnessDecodeResult,
@@ -122,28 +122,64 @@ async function runCatalogInvocation(
 	});
 	let timedOut = false;
 	let cancellation: Promise<void> | null = null;
+	const stop = (): void => {
+		cancellation ??= stopProcessTree(proc);
+	};
 	const timeout = setTimeout(() => {
 		timedOut = true;
-		cancellation = stopProcessTree(proc);
+		stop();
 	}, CATALOG_TIMEOUT_MS);
-	if (invocation.stdin !== undefined && proc.stdin) {
-		proc.stdin.write(invocation.stdin);
-		proc.stdin.end();
-	}
+	const abort = (): void => stop();
+	context.signal?.addEventListener("abort", abort, { once: true });
 	try {
-		const stdout = await readTextTail(proc.stdout, MAX_CATALOG_CHARS);
-		const exitCode = await proc.exited;
+		throwIfInstallationAborted(context.signal);
+		const input = (async (): Promise<void> => {
+			if (invocation.stdin === undefined || !proc.stdin) return;
+			try {
+				await proc.stdin.write(invocation.stdin);
+				await proc.stdin.end();
+			} catch (error) {
+				if (!isClosedPipe(error)) throw error;
+			}
+		})();
+		const exit = proc.exited.then(async (exitCode) => {
+			cancellation ??= stopProcessTree(proc);
+			await cancellation;
+			return exitCode;
+		});
+		const [exitCode, stdout] = await Promise.all([
+			exit,
+			readTextTail(proc.stdout, MAX_CATALOG_CHARS),
+			input,
+		]);
 		if (cancellation) await cancellation;
+		throwIfInstallationAborted(context.signal);
 		if (timedOut) throw new Error("Harness catalog command timed out");
 		if (exitCode !== 0) throw new Error("Harness catalog command failed");
 		return stdout;
 	} finally {
 		clearTimeout(timeout);
+		context.signal?.removeEventListener("abort", abort);
+		cancellation ??= stopProcessTree(proc);
+		await cancellation;
 	}
 }
 
 function diagnostic(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function throwIfInstallationAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw new Error("Harness installation aborted");
+}
+
+function isClosedPipe(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error.code === "EPIPE" || error.code === "ECONNRESET")
+	);
 }
 
 export class HarnessRunner {
@@ -156,6 +192,7 @@ export class HarnessRunner {
 		},
 	): Promise<boolean> {
 		try {
+			throwIfInstallationAborted(context.signal);
 			const proc = Bun.spawn({
 				cwd: context.projectRoot,
 				env: context.env,
@@ -166,18 +203,28 @@ export class HarnessRunner {
 			});
 			let timedOut = false;
 			let cancellation: Promise<void> | null = null;
+			const stop = (): void => {
+				cancellation ??= stopProcessTree(proc);
+			};
 			const timeout = setTimeout(() => {
 				timedOut = true;
-				cancellation = stopProcessTree(proc);
+				stop();
 			}, PROBE_TIMEOUT_MS);
+			const abort = (): void => stop();
+			context.signal?.addEventListener("abort", abort, { once: true });
 			try {
 				const exitCode = await proc.exited;
 				if (cancellation) await cancellation;
+				throwIfInstallationAborted(context.signal);
 				return !timedOut && exitCode === 0;
 			} finally {
 				clearTimeout(timeout);
+				context.signal?.removeEventListener("abort", abort);
+				cancellation ??= stopProcessTree(proc);
+				await cancellation;
 			}
-		} catch {
+		} catch (error) {
+			if (context.signal?.aborted) throw error;
 			return false;
 		}
 	}
@@ -191,6 +238,7 @@ export class HarnessRunner {
 		},
 	): Promise<HarnessModel[]> {
 		const source = definition.catalog;
+		throwIfInstallationAborted(context.signal);
 		if (!source) return [];
 		const output = await runCatalogInvocation(
 			source.models.build(command),
@@ -199,7 +247,7 @@ export class HarnessRunner {
 		const models = source.models.decode(output);
 		const effortSource = source.efforts;
 		if (!effortSource) return normalizeModels(models);
-		const withEfforts = await Promise.all(
+		const effortResults = await Promise.allSettled(
 			models.map(async (model) => {
 				try {
 					const effortOutput = await runCatalogInvocation(
@@ -207,10 +255,19 @@ export class HarnessRunner {
 						context,
 					);
 					return { ...model, efforts: effortSource.decode(effortOutput) };
-				} catch {
+				} catch (error) {
+					if (context.signal?.aborted) throw error;
 					return { ...model, efforts: [] };
 				}
 			}),
+		);
+		throwIfInstallationAborted(context.signal);
+		const rejected = effortResults.find(
+			(result): result is PromiseRejectedResult => result.status === "rejected",
+		);
+		if (rejected) throw rejected.reason;
+		const withEfforts = effortResults.flatMap((result) =>
+			result.status === "fulfilled" ? [result.value] : [],
 		);
 		return normalizeModels(withEfforts);
 	}
@@ -223,6 +280,7 @@ export class HarnessRunner {
 			env: process.env,
 		},
 	): Promise<InstalledHarness> {
+		throwIfInstallationAborted(context.signal);
 		const detected = await HarnessRunner.detect(definition, command, context);
 		let catalog: HarnessCatalogState;
 		let models: HarnessModel[] = [];
@@ -242,12 +300,14 @@ export class HarnessRunner {
 				);
 				catalog = { status: "ready", diagnostics: [] };
 			} catch (error) {
+				if (context.signal?.aborted) throw error;
 				catalog = {
 					status: "failed",
 					diagnostics: [`Harness catalog failed: ${diagnostic(error)}`],
 				};
 			}
 		}
+		throwIfInstallationAborted(context.signal);
 		return {
 			definition,
 			command,
@@ -274,6 +334,7 @@ export class HarnessRunner {
 			let terminalCount = 0;
 			let terminalSuccess = false;
 			let terminalSummary = "";
+			let eventFailure: unknown = null;
 
 			const diagnose = (message: string): void => {
 				if (diagnostics.length < MAX_DIAGNOSTICS)
@@ -312,7 +373,12 @@ export class HarnessRunner {
 						terminalSuccess = event.success;
 						terminalSummary = event.summary ?? "";
 					}
-					onEvent(event);
+					try {
+						onEvent(event);
+					} catch (error) {
+						eventFailure ??= error;
+						if (processHandle) cancellation ??= stopProcessTree(processHandle);
+					}
 				}
 			};
 
@@ -331,11 +397,7 @@ export class HarnessRunner {
 					detached: process.platform !== "win32",
 				});
 				processHandle = proc;
-
-				if (invocation.stdin !== undefined && proc.stdin) {
-					proc.stdin.write(invocation.stdin);
-					proc.stdin.end();
-				}
+				if (cancelled) cancellation ??= stopProcessTree(proc);
 
 				const stderrTask = readTextTail(proc.stderr, MAX_STDERR_CHARS).then(
 					(text) => {
@@ -347,8 +409,35 @@ export class HarnessRunner {
 						`Harness NDJSON record exceeded ${MAX_NDJSON_RECORD_BYTES} bytes`,
 					),
 				);
-				const exitCode = await proc.exited;
-				await Promise.all([stdoutTask, stderrTask]);
+				const inputTask = (async (): Promise<void> => {
+					if (invocation.stdin === undefined || !proc.stdin) return;
+					try {
+						await proc.stdin.write(invocation.stdin);
+						await proc.stdin.end();
+					} catch (error) {
+						if (!isClosedPipe(error)) throw error;
+					}
+				})();
+				const exitTask = proc.exited.then(async (exitCode) => {
+					cancellation ??= stopProcessTree(proc);
+					await cancellation;
+					return exitCode;
+				});
+				const settled = await Promise.allSettled([
+					exitTask,
+					stdoutTask,
+					stderrTask,
+					inputTask,
+				]);
+				const rejected = settled.find(
+					(result): result is PromiseRejectedResult =>
+						result.status === "rejected",
+				);
+				if (rejected) throw rejected.reason;
+				if (eventFailure) throw eventFailure;
+				const exitResult = settled[0];
+				if (exitResult.status !== "fulfilled") throw exitResult.reason;
+				const exitCode = exitResult.value;
 
 				if (cancelled) {
 					return {
@@ -409,6 +498,11 @@ export class HarnessRunner {
 					diagnostics,
 					stderr,
 				};
+			} finally {
+				if (processHandle) {
+					cancellation ??= stopProcessTree(processHandle);
+					await cancellation;
+				}
 			}
 		})();
 

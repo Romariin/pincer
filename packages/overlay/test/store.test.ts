@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
 import type {
 	ClientMessage,
 	ConversationSummary,
@@ -9,10 +8,11 @@ import type {
 	ServerMessage,
 	TurnSummary,
 } from "@pincer/core";
+import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
 import {
+	type ConversationThread,
 	selectVisibleTurnState,
 	usePincerStore,
-	type ConversationThread,
 } from "../src/state/store";
 
 function resetStore(): void {
@@ -254,7 +254,7 @@ describe("per-conversation protocol routing", () => {
 		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
 	});
 
-	test("a queued hidden error with a nullable turn id annotates only its owner", () => {
+	test("a stale nullable error cannot terminate a queued hidden turn", () => {
 		resetStore();
 		setupHiddenAndVisible(
 			liveTurn("hidden", {
@@ -278,9 +278,8 @@ describe("per-conversation protocol routing", () => {
 
 		expect(content("hidden")).toEqual([
 			{ role: "user", blocks: [{ t: "md", text: "queued hidden prompt" }] },
-			{ role: "system", blocks: [{ t: "md", text: "Error: hidden failure" }] },
 		]);
-		expect(requireThread("hidden").turnState).toBe("idle");
+		expect(requireThread("hidden").turnState).toBe("queued");
 		expect(requireThread("visible")).toEqual(visibleBefore);
 		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
 	});
@@ -313,6 +312,52 @@ describe("per-conversation protocol routing", () => {
 		expect(requireThread("visible")).toEqual(visibleBefore);
 		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
 	});
+});
+
+test("stale live frames cannot regress or replace a running turn", () => {
+	resetStore();
+	const summary = conversation("owner", "running");
+	resume(
+		summary,
+		[],
+		liveTurn("owner", {
+			turnId: 12,
+			seq: 4,
+			state: "running",
+			prompt: "current prompt",
+			blocks: [{ t: "md", text: "current output" }],
+		}),
+	);
+	const before = structuredClone(requireThread("owner"));
+
+	apply({
+		v: PROTOCOL_VERSION,
+		type: "turn_queued",
+		conversationId: "owner",
+		liveTurn: liveTurn("owner", {
+			turnId: null,
+			seq: null,
+			state: "queued",
+			queuePosition: 1,
+			prompt: "stale queued prompt",
+			blocks: [],
+		}),
+	});
+	apply({
+		v: PROTOCOL_VERSION,
+		type: "turn_started",
+		conversationId: "owner",
+		turnId: 11,
+		seq: 3,
+		liveTurn: liveTurn("owner", {
+			turnId: 11,
+			seq: 3,
+			prompt: "stale running prompt",
+			blocks: [{ t: "md", text: "stale output" }],
+		}),
+	});
+
+	expect(requireThread("owner")).toEqual(before);
 });
 
 test("queued and started snapshots record one prompt and transition the owner through FIFO state", () => {
@@ -481,6 +526,59 @@ test("submission is exclusive per conversation rather than global", () => {
 	).toEqual(["visible", "other"]);
 });
 
+test("a pending conversation creation cannot be overwritten by a second submission", () => {
+	resetStore();
+	const sent: ClientMessage[] = [];
+	usePincerStore.setState({
+		connected: true,
+		send: (message) => sent.push(message),
+	});
+	const first = {
+		prompt: "first",
+		source: null,
+		domContext: {
+			tag: "page",
+			id: null,
+			classes: [],
+			text: null,
+			ancestry: [],
+		},
+		elements: [],
+	};
+	usePincerStore.getState().submitPrompt(first);
+	usePincerStore.getState().submitPrompt({ ...first, prompt: "second" });
+	expect(sent.map((message) => message.type)).toEqual(["new_conversation"]);
+	expect(usePincerStore.getState().pendingPrompt?.prompt).toBe("first");
+});
+
+test("a correlated prompt rejection releases only its optimistic conversation", () => {
+	resetStore();
+	usePincerStore.setState({ connected: true, send: () => {} });
+	resume(conversation("rejected"));
+	resume(conversation("unrelated", "running"), [], liveTurn("unrelated"));
+	usePincerStore.getState().queueUserMessage("rejected", "rejected prompt", 0);
+	const unrelatedBefore = structuredClone(requireThread("unrelated"));
+
+	apply({
+		v: PROTOCOL_VERSION,
+		type: "error",
+		conversationId: "rejected",
+		requestType: "prompt",
+		code: "harness_unavailable",
+		message: "Harness unavailable.",
+	});
+
+	expect(requireThread("rejected").turnState).toBe("idle");
+	expect(content("rejected")).toEqual([
+		{ role: "user", blocks: [{ t: "md", text: "rejected prompt" }] },
+		{
+			role: "system",
+			blocks: [{ t: "md", text: "Harness unavailable." }],
+		},
+	]);
+	expect(requireThread("unrelated")).toEqual(unrelatedBefore);
+});
+
 test("cancel requests are sent only for the visible queued or running conversation", () => {
 	resetStore();
 	const sent: ClientMessage[] = [];
@@ -608,6 +706,42 @@ test("welcome retains a nonempty opaque persisted model without supplying an eff
 	});
 });
 
+test("welcome replaces a retained Harness that is no longer available", () => {
+	resetStore();
+	usePincerStore.getState().updateCfg({
+		harnessId: "unavailable",
+		model: "stale-model",
+		effort: "stale-effort",
+	});
+
+	apply(
+		welcome([
+			harness("available"),
+			harness("unavailable", { detected: false }),
+		]),
+	);
+
+	expect(usePincerStore.getState().draft).toEqual({
+		harnessId: "available",
+		model: "",
+		effort: "",
+	});
+});
+
+test("an unavailable Harness cannot be selected", () => {
+	resetStore();
+	apply(
+		welcome([
+			harness("available"),
+			harness("unavailable", { detected: false }),
+		]),
+	);
+
+	usePincerStore.getState().choose("harness", "unavailable");
+
+	expect(usePincerStore.getState().draft.harnessId).toBe("available");
+});
+
 test("model switches enforce catalog efforts while retaining opaque selections", () => {
 	resetStore();
 	const selectable = harness("selectable", {
@@ -707,7 +841,10 @@ describe("conversation config acknowledgements", () => {
 	test("existing conversation config changes apply only after acknowledgement", () => {
 		resetStore();
 		const sent: ClientMessage[] = [];
-		usePincerStore.setState({ connected: true, send: (message) => sent.push(message) });
+		usePincerStore.setState({
+			connected: true,
+			send: (message) => sent.push(message),
+		});
 		resume(conversation("config"));
 
 		usePincerStore.getState().updateCfg({ model: "next-model" });
@@ -728,7 +865,9 @@ describe("conversation config acknowledgements", () => {
 			type: "config_updated",
 			conversation: { ...conversation("config"), model: "next-model" },
 		});
-		expect(usePincerStore.getState().conversations[0]?.model).toBe("next-model");
+		expect(usePincerStore.getState().conversations[0]?.model).toBe(
+			"next-model",
+		);
 		expect(usePincerStore.getState().configPending.config).toBeUndefined();
 	});
 
@@ -753,11 +892,15 @@ describe("conversation config acknowledgements", () => {
 
 		for (const turnState of ["queued", "running"] as const) {
 			usePincerStore.setState({ connected: true });
-			resume(conversation("config", turnState), [], liveTurn("config", {
-				state: turnState,
-				turnId: turnState === "queued" ? null : 1,
-				seq: turnState === "queued" ? null : 0,
-			}));
+			resume(
+				conversation("config", turnState),
+				[],
+				liveTurn("config", {
+					state: turnState,
+					turnId: turnState === "queued" ? null : 1,
+					seq: turnState === "queued" ? null : 0,
+				}),
+			);
 			usePincerStore.getState().updateCfg({ model: `during-${turnState}` });
 		}
 		expect(sent).toHaveLength(1);

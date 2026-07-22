@@ -11,7 +11,10 @@ function record(value: unknown): Record<string, unknown> | null {
 		: null;
 }
 
-function only(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+function only(
+	value: Record<string, unknown>,
+	allowed: readonly string[],
+): boolean {
 	return Object.keys(value).every((key) => allowed.includes(key));
 }
 
@@ -78,7 +81,9 @@ function messageBlock(value: unknown): boolean {
 					return (
 						!!hunk &&
 						only(hunk, ["type", "text"]) &&
-						(hunk.type === "add" || hunk.type === "del" || hunk.type === "ctx") &&
+						(hunk.type === "add" ||
+							hunk.type === "del" ||
+							hunk.type === "ctx") &&
 						string(hunk.text)
 					);
 				})
@@ -144,7 +149,9 @@ function conversation(value: unknown): boolean {
 		]) &&
 		string(item.id) &&
 		string(item.branch) &&
-		(item.status === "active" || item.status === "accepted" || item.status === "discarded") &&
+		(item.status === "active" ||
+			item.status === "accepted" ||
+			item.status === "discarded") &&
 		finite(item.createdAt) &&
 		finite(item.updatedAt) &&
 		integer(item.turnCount) &&
@@ -259,7 +266,9 @@ function harness(value: unknown): boolean {
 		typeof capabilities.resume === "boolean" &&
 		!!catalog &&
 		only(catalog, ["status", "diagnostics"]) &&
-		(catalog.status === "ready" || catalog.status === "unsupported" || catalog.status === "failed") &&
+		(catalog.status === "ready" ||
+			catalog.status === "unsupported" ||
+			catalog.status === "failed") &&
 		stringArray(catalog.diagnostics) &&
 		Array.isArray(item.models) &&
 		item.models.every((value) => {
@@ -334,7 +343,8 @@ function fail(error: string): ServerMessageParseResult {
 export function parseServerMessage(raw: unknown): ServerMessageParseResult {
 	const message = record(raw);
 	if (!message) return fail("Expected an object.");
-	if (message.v !== PROTOCOL_VERSION) return fail("Unsupported protocol version.");
+	if (message.v !== PROTOCOL_VERSION)
+		return fail("Unsupported protocol version.");
 	if (!string(message.type)) return fail("Invalid message type.");
 	const allowed = SERVER_MESSAGE_KEYS[message.type];
 	if (!allowed) return fail("Unknown message type.");
@@ -373,7 +383,8 @@ export function parseServerMessage(raw: unknown): ServerMessageParseResult {
 						!!resumedConversation &&
 						resumedLiveTurn.conversationId === resumedConversation.id &&
 						resumedLiveTurn?.state === resumedConversation?.turnState &&
-						resumedLiveTurn?.queuePosition === resumedConversation?.queuePosition);
+						resumedLiveTurn?.queuePosition ===
+							resumedConversation?.queuePosition);
 			break;
 		}
 		case "deleted":
@@ -387,7 +398,8 @@ export function parseServerMessage(raw: unknown): ServerMessageParseResult {
 					message.reason === "unknown_harness" ||
 					message.reason === "harness_unavailable" ||
 					message.reason === "outstanding_turn") &&
-				(message.conversationId === undefined || string(message.conversationId)) &&
+				(message.conversationId === undefined ||
+					string(message.conversationId)) &&
 				(message.files === undefined || stringArray(message.files)) &&
 				string(message.message);
 			break;
@@ -421,7 +433,10 @@ export function parseServerMessage(raw: unknown): ServerMessageParseResult {
 			break;
 		}
 		case "harness_output":
-			valid = string(message.conversationId) && integer(message.turnId) && harnessEvent(message.event);
+			valid =
+				string(message.conversationId) &&
+				integer(message.turnId) &&
+				harnessEvent(message.event);
 			break;
 		case "turn_complete":
 			valid =
@@ -448,12 +463,15 @@ export function parseServerMessage(raw: unknown): ServerMessageParseResult {
 			break;
 		case "error":
 			valid =
-				(message.conversationId === undefined || string(message.conversationId)) &&
-				(message.requestType === undefined || requestType(message.requestType)) &&
+				(message.conversationId === undefined ||
+					string(message.conversationId)) &&
+				(message.requestType === undefined ||
+					requestType(message.requestType)) &&
 				(message.code === undefined ||
 					message.code === "merge_conflict" ||
 					message.code === "unknown_conversation" ||
 					message.code === "bad_message" ||
+					message.code === "internal_error" ||
 					message.code === "settings_unavailable" ||
 					message.code === "unknown_harness" ||
 					message.code === "harness_unavailable") &&

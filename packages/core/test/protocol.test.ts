@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-	PROTOCOL_VERSION,
-	parseClientMessage,
-	parseServerMessage,
 	type ClientMessage,
 	type ConversationSummary,
 	type HarnessDescriptor,
 	type LiveTurnSnapshot,
 	type OverlaySettings,
+	PROTOCOL_VERSION,
+	parseClientMessage,
+	parseServerMessage,
 	type ServerMessage,
 	type TurnSummary,
 } from "../src";
@@ -135,10 +135,17 @@ describe("parseClientMessage", () => {
 			prompt({ prompt: "x".repeat(100_001) }),
 			prompt({ source: { path: "src/App.tsx", line: 0, column: 1 } }),
 			prompt({ source: { path: "src/App.tsx", line: 1, column: -1 } }),
-			prompt({ domContext: { ...context, ancestry: ["a", "b", "c", "d", "e", "f"] } }),
+			prompt({
+				domContext: { ...context, ancestry: ["a", "b", "c", "d", "e", "f"] },
+			}),
 			prompt({ domContext: { ...context, classes: [4] } }),
 			prompt({ domContext: { ...context, text: "x".repeat(20_001) } }),
-			prompt({ elements: Array.from({ length: 51 }, () => ({ source: null, domContext: context })) }),
+			prompt({
+				elements: Array.from({ length: 51 }, () => ({
+					source: null,
+					domContext: context,
+				})),
+			}),
 			prompt({ elements: [{ source: "src/App.tsx", domContext: context }] }),
 		];
 		for (const message of malformed) {
@@ -172,7 +179,13 @@ describe("parseClientMessage", () => {
 				type: "update_overlay_settings",
 				appRoot: "/app",
 				appOrigin: "http://localhost",
-				shortcut: { code: "Escape", alt: true, ctrl: false, shift: false, meta: false },
+				shortcut: {
+					code: "Escape",
+					alt: true,
+					ctrl: false,
+					shift: false,
+					meta: false,
+				},
 			},
 		];
 		for (const message of malformed) {
@@ -264,7 +277,11 @@ describe("parseServerMessage", () => {
 	const valid: ServerMessage[] = [
 		welcome,
 		{ v: PROTOCOL_VERSION, type: "conversations", items: [summary] },
-		{ v: PROTOCOL_VERSION, type: "conversation_started", conversation: summary },
+		{
+			v: PROTOCOL_VERSION,
+			type: "conversation_started",
+			conversation: summary,
+		},
 		{
 			v: PROTOCOL_VERSION,
 			type: "conversation_resumed",
@@ -282,8 +299,17 @@ describe("parseServerMessage", () => {
 			files: ["src/App.tsx"],
 			message: "Dirty tree",
 		},
-		{ v: PROTOCOL_VERSION, type: "overlay_settings", settings: overlaySettings },
-		{ v: PROTOCOL_VERSION, type: "turn_queued", conversationId: summary.id, liveTurn: queued },
+		{
+			v: PROTOCOL_VERSION,
+			type: "overlay_settings",
+			settings: overlaySettings,
+		},
+		{
+			v: PROTOCOL_VERSION,
+			type: "turn_queued",
+			conversationId: summary.id,
+			liveTurn: queued,
+		},
 		{
 			v: PROTOCOL_VERSION,
 			type: "turn_started",
@@ -311,7 +337,11 @@ describe("parseServerMessage", () => {
 			type: "harness_output",
 			conversationId: summary.id,
 			turnId: 1,
-			event: { kind: "diff", file: "src/App.tsx", hunks: [{ type: "add", text: "+x" }] },
+			event: {
+				kind: "diff",
+				file: "src/App.tsx",
+				hunks: [{ type: "add", text: "+x" }],
+			},
 		},
 		{
 			v: PROTOCOL_VERSION,
@@ -343,9 +373,24 @@ describe("parseServerMessage", () => {
 			turnId: null,
 			message: "Failed",
 		},
-		{ v: PROTOCOL_VERSION, type: "turn_cancelled", conversationId: summary.id, turnId: null },
-		{ v: PROTOCOL_VERSION, type: "reverted", conversationId: summary.id, checkpoint: "abc123" },
-		{ v: PROTOCOL_VERSION, type: "accepted", conversationId: summary.id, mergeCommit: "def456" },
+		{
+			v: PROTOCOL_VERSION,
+			type: "turn_cancelled",
+			conversationId: summary.id,
+			turnId: null,
+		},
+		{
+			v: PROTOCOL_VERSION,
+			type: "reverted",
+			conversationId: summary.id,
+			checkpoint: "abc123",
+		},
+		{
+			v: PROTOCOL_VERSION,
+			type: "accepted",
+			conversationId: summary.id,
+			mergeCommit: "def456",
+		},
 		{ v: PROTOCOL_VERSION, type: "discarded", conversationId: summary.id },
 		{
 			v: PROTOCOL_VERSION,
@@ -353,6 +398,13 @@ describe("parseServerMessage", () => {
 			conversationId: summary.id,
 			code: "unknown_conversation",
 			message: "Unknown conversation",
+		},
+		{
+			v: PROTOCOL_VERSION,
+			type: "error",
+			requestType: "new_conversation",
+			code: "internal_error",
+			message: "Request failed.",
 		},
 	];
 

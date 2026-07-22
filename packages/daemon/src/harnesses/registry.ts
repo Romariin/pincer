@@ -19,6 +19,7 @@ export interface HarnessRegistryConfig {
 	/** Project and environment used by CLI probes and advisory catalog commands. */
 	projectRoot?: string;
 	env?: HarnessRuntimeContext["env"];
+	signal?: AbortSignal;
 }
 
 export interface ResolvedHarnesses {
@@ -80,15 +81,23 @@ export async function resolveHarnesses(
 		}
 	}
 
-	const harnesses = await Promise.all(
+	const installations = await Promise.allSettled(
 		definitions.map((definition) => {
 			const command =
 				config.commands?.[definition.id] ?? definition.defaultCommand;
 			return HarnessRunner.install(definition, [...command], {
 				projectRoot: config.projectRoot ?? process.cwd(),
 				env: config.env ?? process.env,
+				signal: config.signal,
 			});
 		}),
+	);
+	const rejected = installations.find(
+		(result): result is PromiseRejectedResult => result.status === "rejected",
+	);
+	if (rejected) throw rejected.reason;
+	const harnesses = installations.flatMap((result) =>
+		result.status === "fulfilled" ? [result.value] : [],
 	);
 
 	const defaultHarnessId = config.selectedId

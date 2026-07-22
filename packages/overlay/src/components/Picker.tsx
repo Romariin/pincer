@@ -1,23 +1,15 @@
-import {
-	useState,
-	type CSSProperties,
-	type ReactNode,
-	type RefObject,
-} from "react";
 import type { HarnessDescriptor, HarnessModel } from "@pincer/core";
-import { usePincerStore, useCfg } from "@/state/store";
+import { type ReactNode, type RefObject, useState } from "react";
 import {
-	effortLabel,
+	effortPickerOptions,
 	harnessInfo,
 	modelEfforts,
 	modelLabel,
 	modelPickerOptions,
 } from "@/lib/harness";
-import { cn } from "@/lib/utils";
+import { useCfg, usePincerStore } from "@/state/store";
 import { Avatar } from "./Avatar";
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "./ui/drawer";
 import { Button } from "./ui/button";
-import { Slider } from "./ui/slider";
 import {
 	Combobox,
 	ComboboxContent,
@@ -27,6 +19,7 @@ import {
 	ComboboxList,
 	ComboboxTrigger,
 } from "./ui/combobox";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "./ui/drawer";
 
 type Container = RefObject<HTMLDivElement | null>;
 
@@ -86,6 +79,7 @@ function HarnessCombobox({ container }: { container: Container }): ReactNode {
 						<ComboboxItem
 							key={harness.id}
 							value={harness}
+							disabled={!harness.detected}
 							className="gap-2.5 pr-7"
 						>
 							<Avatar info={harness} size={22} />
@@ -154,90 +148,52 @@ function ModelCombobox({ container }: { container: Container }): ReactNode {
 	);
 }
 
-function EffortSlider({
-	list,
-	value,
-	onCommit,
-}: {
-	list: string[];
-	value: string;
-	onCommit: (v: string) => void;
-}): ReactNode {
-	const n = list.length;
-	const idx = Math.max(0, list.indexOf(value));
-	const listKey = list.join("\u0000");
-	const [drag, setDrag] = useState<{
-		index: number;
-		listKey: string;
-		value: string;
-	} | null>(null);
-	const shown =
-		drag?.listKey === listKey && drag.value === value ? drag.index : idx;
-	const at = (i: number): number => (i / (n - 1)) * 100;
-	const tickStyle = (i: number): CSSProperties => ({
-		left: `${at(i)}%`,
-		transform: "translate(-50%,-50%)",
-	});
-	const labelStyle = (i: number): CSSProperties => ({
-		left: `${at(i)}%`,
-		transform: "translateX(-50%)",
-	});
+function EffortCombobox({ container }: { container: Container }): ReactNode {
+	const harnessMap = usePincerStore((s) => s.harnessMap);
+	const choose = usePincerStore((s) => s.choose);
+	const cfg = useCfg();
+	const info = harnessInfo(harnessMap, cfg.harnessId);
+	const [query, setQuery] = useState("");
+	const options = effortPickerOptions(
+		modelEfforts(info, cfg.model, cfg.effort),
+		cfg.effort,
+		query,
+	);
+	const value = options.find((option) => option.id === cfg.effort) ?? null;
 
 	return (
-		<div className="px-6 pt-1">
-			<div className="relative">
-				<div className="pointer-events-none absolute inset-0 z-10">
-					{list.map((e, i) => (
-						<span
-							key={e}
-							style={tickStyle(i)}
-							className={cn(
-								"absolute top-1/2 h-2 w-0.5 rounded-full",
-								i <= shown
-									? "bg-primary-foreground/70"
-									: "bg-muted-foreground/50",
-							)}
-						/>
-					))}
-				</div>
-				<Slider
-					min={0}
-					max={n - 1}
-					step={1}
-					value={[shown]}
-					onValueChange={(v) => {
-						setDrag({
-							index: Array.isArray(v) ? (v[0] ?? 0) : v,
-							listKey,
-							value,
-						});
-					}}
-					onValueCommitted={(v) => {
-						const i = Array.isArray(v) ? (v[0] ?? 0) : v;
-						setDrag(null);
-						onCommit(list[i] ?? value);
-					}}
-				/>
-			</div>
-			<div className="relative mt-3 h-4">
-				{list.map((e, i) => (
-					<button
-						key={e}
-						type="button"
-						style={labelStyle(i)}
-						onClick={() => onCommit(e)}
-						className={cn(
-							"absolute top-0 cursor-pointer text-[10px] leading-none whitespace-nowrap transition-colors hover:text-foreground",
-							i === shown
-								? "font-semibold text-primary"
-								: "text-muted-foreground",
-						)}
-					>
-						{effortLabel(e)}
-					</button>
-				))}
-			</div>
-		</div>
+		<Combobox
+			items={options}
+			itemToStringValue={(option: HarnessModel) => option.label}
+			value={value}
+			onInputValueChange={(input) => setQuery(input)}
+			onValueChange={(option: HarnessModel | null) => {
+				if (option) {
+					choose("effort", option.id);
+					setQuery("");
+				}
+			}}
+		>
+			<ComboboxTrigger
+				render={
+					<Button variant="outline" className="w-full justify-between px-3" />
+				}
+			>
+				<span className="truncate">{value?.label ?? "Default"}</span>
+				<span className="text-muted-foreground">⌄</span>
+			</ComboboxTrigger>
+			<ComboboxContent container={container} className="z-[2147483647]">
+				<ComboboxInput placeholder="Search or enter an effort…" />
+				<ComboboxEmpty>Type an effort value to use it.</ComboboxEmpty>
+				<ComboboxList>
+					{(option: HarnessModel) => (
+						<ComboboxItem key={option.id} value={option}>
+							<span className="truncate">{option.label}</span>
+						</ComboboxItem>
+					)}
+				</ComboboxList>
+			</ComboboxContent>
+		</Combobox>
 	);
 }
 
@@ -245,10 +201,8 @@ export function Picker({ container }: { container: Container }): ReactNode {
 	const picker = usePincerStore((s) => s.picker);
 	const closePicker = usePincerStore((s) => s.closePicker);
 	const harnessMap = usePincerStore((s) => s.harnessMap);
-	const choose = usePincerStore((s) => s.choose);
 	const cfg = useCfg();
 	const info = harnessInfo(harnessMap, cfg.harnessId);
-	const effortList = modelEfforts(info, cfg.model, cfg.effort);
 
 	return (
 		<Drawer
@@ -272,13 +226,9 @@ export function Picker({ container }: { container: Container }): ReactNode {
 							<ModelCombobox container={container} />
 						</Section>
 					) : null}
-					{info.capabilities.effort && effortList.length > 1 ? (
+					{info.capabilities.effort ? (
 						<Section label="EFFORT">
-							<EffortSlider
-								list={effortList}
-								value={cfg.effort}
-								onCommit={(value) => choose("effort", value)}
-							/>
+							<EffortCombobox container={container} />
 						</Section>
 					) : null}
 				</div>

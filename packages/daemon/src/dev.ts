@@ -1,7 +1,7 @@
-import type { Server, ServerWebSocket, Subprocess } from "bun";
 import { CONTRACT_A_VERSION } from "@pincer/core";
-import { isLocalOrigin, startDaemon, type RunningDaemon } from "./server";
+import type { Server, ServerWebSocket, Subprocess } from "bun";
 import { stopProcessTree } from "./processTree";
+import { isLocalOrigin, type RunningDaemon, startDaemon } from "./server";
 
 /**
  * `pincer -- <cmd>`: wraps the app's own dev server behind an injection
@@ -321,10 +321,12 @@ export interface DevOptions {
 	dataRoot?: string;
 	log: (msg: string) => void;
 	overlayBundle?: string;
+	signal?: AbortSignal;
 }
 
 export async function runDev(opts: DevOptions): Promise<void> {
-	const overlayBundle = opts.overlayBundle ?? (await import("./overlayAsset")).default;
+	const overlayBundle =
+		opts.overlayBundle ?? (await import("./overlayAsset")).default;
 	const daemon: RunningDaemon = await startDaemon({
 		projectRoot: opts.projectRoot,
 		port: opts.daemonPort,
@@ -332,6 +334,7 @@ export async function runDev(opts: DevOptions): Promise<void> {
 		harnessCommands: opts.harnessCommands,
 		dataRoot: opts.dataRoot,
 		log: opts.log,
+		signal: opts.signal,
 	});
 	opts.log(
 		`daemon on ws://127.0.0.1:${daemon.port}, project ${opts.projectRoot}, Harness ${daemon.orchestrator.defaultHarnessId ?? "none"}`,
