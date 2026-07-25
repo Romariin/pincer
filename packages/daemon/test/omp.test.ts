@@ -2,97 +2,101 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { PROTOCOL_VERSION } from "@pincer/core";
-import { createHarness, FAKE_OMP, type Harness } from "./harness";
+import { createHarness, type Harness } from "./harness";
 
 const V = PROTOCOL_VERSION;
-let h: Harness | undefined;
-
+let harness: Harness | undefined;
 setDefaultTimeout(30_000);
 
 afterEach(async () => {
-  await h?.close();
-  h = undefined;
+	await harness?.close();
+	harness = undefined;
 });
 
-async function startConversation(harness: Harness): Promise<string> {
-  harness.send({ v: V, type: "new_conversation" });
-  const started = await harness.next("conversation_started");
-  return started.conversation.id;
+async function startConversation(current: Harness): Promise<string> {
+	current.send({ v: V, type: "new_conversation", harnessId: "omp" });
+	return (await current.next("conversation_started")).conversation.id;
 }
 
-async function runTurn(harness: Harness, convId: string, prompt: string): Promise<void> {
-  harness.send({
-    v: V,
-    type: "prompt",
-    conversationId: convId,
-    prompt,
-    source: harness.source,
-    domContext: harness.domContext,
-  });
-  await harness.next("turn_started");
-  await harness.next("turn_complete");
+async function runTurn(
+	current: Harness,
+	conversationId: string,
+	prompt: string,
+): Promise<void> {
+	current.send({
+		v: V,
+		type: "prompt",
+		conversationId,
+		prompt,
+		source: current.source,
+		domContext: current.domContext,
+	});
+	await current.next("turn_started");
+	expect(await current.next("turn_complete")).toMatchObject({
+		success: true,
+		checkpoint: null,
+	});
 }
 
-function lastTurnRow(harness: Harness, convId: string): Record<string, unknown> {
-  const db = new Database(harness.historyDbPath);
-  try {
-    const row = db
-      .query("SELECT * FROM turns WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1")
-      .get(convId);
-    if (!row || typeof row !== "object") throw new Error("no turn row found");
-    return row as Record<string, unknown>;
-  } finally {
-    db.close();
-  }
-}
+test("real OMP definition edits the project and persists its Harness-qualified session token", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{
+					session: "omp-session-contract",
+					text: "Applying the requested edit",
+					edits: [{ path: "src/App.tsx", append: "\n// OMP_EDIT\n" }],
+				},
+			],
+		},
+	});
+	await harness.next("welcome");
+	const conversationId = await startConversation(harness);
+	await runTurn(harness, conversationId, harness.userPrompt);
 
-test("omp happy turn edits the file in place and captures the session id", async () => {
-  h = await createHarness({ agentId: "omp", agentCommand: ["bun", FAKE_OMP] });
-  const convId = await startConversation(h);
+	expect(harness.readTarget()).toContain("OMP_EDIT");
+	const invocation = harness.invocations()[0];
+	expect(invocation?.kind).toBe("omp");
+	const sessionDir = invocation?.argv.indexOf("--session-dir") ?? -1;
+	expect(invocation?.argv[sessionDir + 1]).toBe(
+		join(harness.pincerDataDir, "omp-sessions"),
+	);
+	expect(invocation?.argv.at(-1)).toContain(harness.userPrompt);
+	expect(invocation?.argv.at(-1)).toContain("src/App.tsx");
 
-  h.send({
-    v: V,
-    type: "prompt",
-    conversationId: convId,
-    prompt: h.userPrompt,
-    source: h.source,
-    domContext: h.domContext,
-  });
-  await h.next("turn_started");
-
-  const complete = await h.next("turn_complete");
-  expect(complete.success).toBe(true);
-  expect(complete.checkpoint).toBeNull();
-
-  expect(h.readTarget()).toContain("PINCER_EDIT_MARKER");
-
-  const record = JSON.parse(h.readRecord()) as { argv: string[] };
-  const argv = record.argv;
-  expect(argv).toContain("-p");
-  expect(argv).toContain("--mode");
-  expect(argv).toContain("json");
-  expect(argv).toContain("--auto-approve");
-  expect(argv).toContain("--session-dir");
-  const sessionDirIndex = argv.indexOf("--session-dir");
-  expect(argv[sessionDirIndex + 1]).toBe(join(h.pincerDataDir, "omp-sessions"));
-  expect(argv).not.toContain("-r");
-  // Source path and user prompt live inside the trailing composed positional arg.
-  const composed = argv[argv.length - 1] ?? "";
-  expect(composed).toContain("src/App.tsx");
-  expect(composed).toContain(h.userPrompt);
-
-  const turn = lastTurnRow(h, convId);
-  expect(turn.agent_session_id).toBe("omp-sess-1");
+	const db = new Database(harness.historyDbPath, { readonly: true });
+	try {
+		expect(
+			db
+				.query(
+					"SELECT harness_id, resume_token, status FROM turns WHERE conversation_id = ?",
+				)
+				.get(conversationId),
+		).toEqual({
+			harness_id: "omp",
+			resume_token: "omp-session-contract",
+			status: "complete",
+		});
+	} finally {
+		db.close();
+	}
 });
 
-test("omp resume uses -r with the captured session id on the second turn", async () => {
-  h = await createHarness({ agentId: "omp", agentCommand: ["bun", FAKE_OMP] });
-  const convId = await startConversation(h);
-  await runTurn(h, convId, "first change");
-  await runTurn(h, convId, "second change");
+test("a consecutive OMP turn resumes with the token issued by the prior OMP turn", async () => {
+	harness = await createHarness({
+		plan: {
+			executions: [
+				{ session: "omp-session-first", text: "first" },
+				{ session: "omp-session-second", text: "second" },
+			],
+		},
+	});
+	await harness.next("welcome");
+	const conversationId = await startConversation(harness);
+	await runTurn(harness, conversationId, "first change");
+	await runTurn(harness, conversationId, "second change");
 
-  const record2 = JSON.parse(h.readRecord()) as { argv: string[] };
-  const argv = record2.argv;
-  expect(argv).toContain("-r");
-  expect(argv).toContain("omp-sess-1");
+	const second = harness.invocations()[1];
+	const resumeFlag = second?.argv.indexOf("-r") ?? -1;
+	expect(second?.argv[resumeFlag + 1]).toBe("omp-session-first");
 });

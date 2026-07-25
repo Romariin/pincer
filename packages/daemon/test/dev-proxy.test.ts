@@ -44,6 +44,7 @@ function startProxyFor(server: Server<{ dummy?: true }>): RunningProxy {
     port: 0,
     wsUrl: "ws://127.0.0.1:7391",
     projectRoot: "/tmp/example",
+    overlayBundle: "globalThis.__pincerTestOverlay=true;".repeat(40),
   });
 }
 
@@ -115,6 +116,7 @@ test("returns 502 when the upstream is down", async () => {
     port: 0,
     wsUrl: "ws://127.0.0.1:7391",
     projectRoot: "/tmp/example",
+    overlayBundle: "globalThis.__pincerTestOverlay=true;".repeat(40),
   });
 
   const res = await fetch(`http://127.0.0.1:${proxy.port}/`);
