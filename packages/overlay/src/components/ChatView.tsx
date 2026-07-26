@@ -1,13 +1,14 @@
 import type { ReactNode } from "react";
-import { usePincerStore, type Msg } from "@/state/store";
+import { usePincerStore } from "@/state/store";
+import type { Msg } from "@/state/thread";
 import { Message } from "./Message";
 import {
-	MessageScrollerProvider,
 	MessageScroller,
-	MessageScrollerViewport,
+	MessageScrollerButton,
 	MessageScrollerContent,
 	MessageScrollerItem,
-	MessageScrollerButton,
+	MessageScrollerProvider,
+	MessageScrollerViewport,
 } from "./ui/message-scroller";
 
 const EMPTY_MESSAGES: Msg[] = [];

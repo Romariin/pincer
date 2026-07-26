@@ -1,8 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-	collectNewDiffEvents,
-	parseUnifiedDiff,
-} from "../src/diffCollector";
+import { collectNewDiffEvents, parseUnifiedDiff } from "../src/diffCollector";
 
 const before = `diff --git a/src/App.tsx b/src/App.tsx
 --- a/src/App.tsx

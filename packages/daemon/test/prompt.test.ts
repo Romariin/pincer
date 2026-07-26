@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { HarnessTurnRequest } from "../src/harnesses/types";
 import { composePrompt } from "../src/harnesses/prompt";
+import type { HarnessTurnRequest } from "../src/harnesses/types";
 
 const base: HarnessTurnRequest = {
 	prompt: "make it red",

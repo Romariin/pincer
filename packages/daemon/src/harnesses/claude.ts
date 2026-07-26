@@ -1,5 +1,5 @@
 import type { HarnessEvent, HarnessModel } from "@pincer/core";
-import { asRecord as record, decodedEvents as events } from "./adapter";
+import { decodedEvents as events, asRecord as record } from "./adapter";
 import { composePrompt } from "./prompt";
 import type { HarnessDefinition } from "./types";
 

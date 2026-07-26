@@ -1,11 +1,11 @@
-import type { ReactNode } from "react";
 import type { ConversationSummary } from "@pincer/core";
-import { usePincerStore } from "@/state/store";
-import { harnessInfo, modelLabel } from "@/lib/harness";
-import { Avatar } from "./Avatar";
-import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
 import { Trash2Icon } from "lucide-react";
+import type { ReactNode } from "react";
+import { harnessInfo, modelLabel } from "@/lib/harness";
+import { usePincerStore } from "@/state/store";
+import { Avatar } from "./Avatar";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 
 const GROUP_ORDER = ["TODAY", "YESTERDAY", "EARLIER"] as const;
 
@@ -26,7 +26,9 @@ function groupLabel(ts: number): (typeof GROUP_ORDER)[number] {
 function Row({ c }: { c: ConversationSummary }): ReactNode {
 	const harnessMap = usePincerStore((s) => s.harnessMap);
 	const openConversation = usePincerStore((state) => state.openConversation);
-	const deleteConversation = usePincerStore((state) => state.deleteConversation);
+	const deleteConversation = usePincerStore(
+		(state) => state.deleteConversation,
+	);
 	const optimisticTitle = usePincerStore((state) => {
 		const messages = state.threads[c.id]?.messages;
 		if (!messages) return "";

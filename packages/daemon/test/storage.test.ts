@@ -1,21 +1,21 @@
-import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { expect, test } from "bun:test";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
+	type MigrationFs,
 	migrateLegacyProjectData,
 	nodeMigrationFs,
 	projectDataDir,
-	type MigrationFs,
 } from "../src/paths";
 import { Store } from "../src/store";
 import { createHarness, type Harness } from "./harness";
@@ -353,9 +353,9 @@ test("turn append allocates sequence numbers atomically and schema enforces owne
 	try {
 		db.exec("PRAGMA foreign_keys = ON");
 		expect(
-			(db.query("PRAGMA foreign_key_list(turns)").all() as { table: string }[]).map(
-				(row) => row.table,
-			),
+			(
+				db.query("PRAGMA foreign_key_list(turns)").all() as { table: string }[]
+			).map((row) => row.table),
 		).toContain("conversations");
 		expect(() =>
 			db
@@ -377,7 +377,9 @@ test("turn append allocates sequence numbers atomically and schema enforces owne
 		).toThrow();
 		expect(() =>
 			db
-				.query("UPDATE conversations SET status = 'unknown' WHERE id = 'conversation'")
+				.query(
+					"UPDATE conversations SET status = 'unknown' WHERE id = 'conversation'",
+				)
 				.run(),
 		).toThrow();
 		expect(() =>

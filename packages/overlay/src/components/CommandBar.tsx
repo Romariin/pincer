@@ -1,16 +1,16 @@
-import type { ReactNode } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { usePincerStore, useCfg } from "@/state/store";
+import type { ReactNode } from "react";
 import {
 	effortLabel,
 	harnessInfo,
 	modelEfforts,
 	modelLabel,
 } from "@/lib/harness";
+import { useActiveCfg, usePincerStore } from "@/state/store";
 import { Avatar } from "./Avatar";
 
 export function CommandBar(): ReactNode {
-	const cfg = useCfg();
+	const cfg = useActiveCfg();
 	const harnessMap = usePincerStore((s) => s.harnessMap);
 	const openPicker = usePincerStore((s) => s.openPicker);
 	const info = harnessInfo(harnessMap, cfg.harnessId);

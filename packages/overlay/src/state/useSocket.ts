@@ -1,5 +1,5 @@
+import { type ClientMessage, parseServerMessage } from "@pincer/core";
 import { useEffect } from "react";
-import { parseServerMessage, type ClientMessage } from "@pincer/core";
 import { usePincerStore } from "./store";
 import { PincerClient } from "./transport";
 
@@ -10,7 +10,7 @@ export function useSocket(): void {
 	const setSend = usePincerStore((s) => s.setSend);
 	const setConnected = usePincerStore((s) => s.setConnected);
 	const applyServerMessage = usePincerStore((s) => s.applyServerMessage);
-	const prepareSettings = usePincerStore((s) => s.prepareSettings);
+	const setAppIdentity = usePincerStore((s) => s.setAppIdentity);
 
 	useEffect(() => {
 		const config = window.__PINCER__ ?? {};
@@ -28,7 +28,7 @@ export function useSocket(): void {
 			appRoot && appOrigin
 				? null
 				: "Pincer app identity requires the Vite integration on an HTTP(S) preview.";
-		prepareSettings(appRoot, appOrigin, identityError);
+		setAppIdentity(appRoot, appOrigin, identityError);
 
 		let ws: WebSocket | null = null;
 		let backoff = 500;
@@ -60,7 +60,7 @@ export function useSocket(): void {
 			let welcomed = false;
 			let reconnectAllowed = true;
 			socket.addEventListener("open", () => {
-				prepareSettings(appRoot, appOrigin, identityError);
+				setAppIdentity(appRoot, appOrigin, identityError);
 			});
 			socket.addEventListener("message", (ev: MessageEvent) => {
 				let parsed: ReturnType<typeof parseServerMessage>;
@@ -122,5 +122,5 @@ export function useSocket(): void {
 			clearTimeout(timer);
 			ws?.close();
 		};
-	}, [setSend, setConnected, applyServerMessage, prepareSettings]);
+	}, [setSend, setConnected, applyServerMessage, setAppIdentity]);
 }

@@ -15,7 +15,9 @@ export function decodedEvents(events: HarnessEvent[]): HarnessDecodeResult {
 	return { kind: "events", events };
 }
 
-export function normalizeModels(models: readonly HarnessModel[]): HarnessModel[] {
+export function normalizeModels(
+	models: readonly HarnessModel[],
+): HarnessModel[] {
 	const normalized = new Map<string, HarnessModel>();
 	for (const model of models) {
 		const id = model.id.trim();

@@ -2,167 +2,23 @@ import { describe, expect, test } from "bun:test";
 import type {
 	ClientMessage,
 	ConversationSummary,
-	HarnessDescriptor,
 	LiveTurnSnapshot,
-	MessageBlock,
-	ServerMessage,
-	TurnSummary,
 } from "@pincer/core";
-import { DEFAULT_TOGGLE_SHORTCUT, PROTOCOL_VERSION } from "@pincer/core";
+import { PROTOCOL_VERSION } from "@pincer/core";
+import { visibleTurnState } from "../src/state/selectors";
+import { usePincerStore } from "../src/state/store";
 import {
-	type ConversationThread,
-	selectVisibleTurnState,
-	usePincerStore,
-} from "../src/state/store";
-
-function resetStore(): void {
-	usePincerStore.setState({
-		connected: false,
-		view: "list",
-		panelOpen: false,
-		selecting: false,
-		picker: null,
-		shortcut: DEFAULT_TOGGLE_SHORTCUT,
-		showFloatingButton: true,
-		appRoot: null,
-		appOrigin: null,
-		settingsLoaded: false,
-		settingsPending: false,
-		settingsError: null,
-		recordingShortcut: false,
-		harnesses: [],
-		harnessMap: {},
-		draft: { harnessId: "", model: "", effort: "High" },
-		conversations: [],
-		conversationId: null,
-		threads: {},
-		pendingPrompt: null,
-		selections: [],
-		send: () => {},
-	});
-}
-
-function conversation(
-	id: string,
-	turnState: ConversationSummary["turnState"] = "idle",
-	queuePosition: number | null = null,
-): ConversationSummary {
-	return {
-		id,
-		branch: `pincer/${id}`,
-		status: "active",
-		createdAt: 1,
-		updatedAt: 2,
-		turnCount: 0,
-		title: `${id} title`,
-		harnessId: "codex",
-		model: "gpt-5",
-		effort: "high",
-		turnState,
-		queuePosition,
-	};
-}
-
-function liveTurn(
-	conversationId: string,
-	overrides: Partial<LiveTurnSnapshot> = {},
-): LiveTurnSnapshot {
-	return {
-		conversationId,
-		turnId: 1,
-		seq: 0,
-		state: "running",
-		queuePosition: null,
-		prompt: `${conversationId} prompt`,
-		blocks: [],
-		selection: { harnessId: "codex", model: "gpt-5", effort: "high" },
-		...overrides,
-	};
-}
-
-function turn(
-	seq: number,
-	prompt: string,
-	blocks: MessageBlock[],
-): TurnSummary {
-	return {
-		id: seq + 1,
-		seq,
-		prompt,
-		checkpoint: `checkpoint-${seq}`,
-		status: "complete",
-		createdAt: seq + 1,
-		output: blocks
-			.filter(
-				(block): block is Extract<MessageBlock, { t: "md" }> =>
-					block.t === "md",
-			)
-			.map((block) => block.text)
-			.join(""),
-		blocks,
-	};
-}
-
-function harness(
-	id: string,
-	overrides: Partial<HarnessDescriptor> = {},
-): HarnessDescriptor {
-	return {
-		id,
-		label: id,
-		glyph: ">_",
-		c1: "#111111",
-		c2: "#222222",
-		detected: true,
-		capabilities: { model: true, effort: true, resume: true },
-		catalog: { status: "ready", diagnostics: [] },
-		models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }],
-		...overrides,
-	};
-}
-
-const welcome = (harnesses: HarnessDescriptor[] = []): ServerMessage => ({
-	v: PROTOCOL_VERSION,
-	type: "welcome",
-	daemonVersion: "test",
-	protocolVersion: PROTOCOL_VERSION,
-	projectRoot: "/project",
-	harnesses,
-	defaultHarnessId: harnesses[0]?.id ?? null,
-});
-
-const apply = (message: ServerMessage): void =>
-	usePincerStore.getState().applyServerMessage(message);
-
-function resume(
-	summary: ConversationSummary,
-	turns: TurnSummary[] = [],
-	current: LiveTurnSnapshot | null = null,
-): void {
-	apply({
-		v: PROTOCOL_VERSION,
-		type: "conversation_resumed",
-		conversation: summary,
-		turns,
-		liveTurn: current,
-	});
-}
-
-function requireThread(conversationId: string): ConversationThread {
-	const thread = usePincerStore.getState().threads[conversationId];
-	if (!thread) throw new Error(`expected thread ${conversationId}`);
-	return thread;
-}
-
-function content(conversationId: string): Array<{
-	role: "user" | "assistant" | "system";
-	blocks: MessageBlock[];
-}> {
-	return requireThread(conversationId).messages.map(({ role, blocks }) => ({
-		role,
-		blocks,
-	}));
-}
+	apply,
+	content,
+	conversation,
+	harness,
+	liveTurn,
+	requireThread,
+	resetStore,
+	resume,
+	turn,
+	welcome,
+} from "./fixtures";
 
 function setupHiddenAndVisible(
 	hiddenLive: LiveTurnSnapshot,
@@ -228,7 +84,7 @@ describe("per-conversation protocol routing", () => {
 			},
 		]);
 		expect(requireThread("visible")).toEqual(visibleBefore);
-		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
+		expect(visibleTurnState(usePincerStore.getState())).toBe("running");
 
 		apply({
 			v: PROTOCOL_VERSION,
@@ -251,7 +107,7 @@ describe("per-conversation protocol routing", () => {
 		});
 		expect(content("hidden")).toEqual(completedContent);
 		expect(requireThread("visible")).toEqual(visibleBefore);
-		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
+		expect(visibleTurnState(usePincerStore.getState())).toBe("running");
 	});
 
 	test("a stale nullable error cannot terminate a queued hidden turn", () => {
@@ -281,7 +137,7 @@ describe("per-conversation protocol routing", () => {
 		]);
 		expect(requireThread("hidden").turnState).toBe("queued");
 		expect(requireThread("visible")).toEqual(visibleBefore);
-		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
+		expect(visibleTurnState(usePincerStore.getState())).toBe("running");
 	});
 
 	test("cancelling a queued hidden turn with no turn id leaves the visible run untouched", () => {
@@ -310,7 +166,7 @@ describe("per-conversation protocol routing", () => {
 		]);
 		expect(requireThread("hidden").turnState).toBe("idle");
 		expect(requireThread("visible")).toEqual(visibleBefore);
-		expect(selectVisibleTurnState(usePincerStore.getState())).toBe("running");
+		expect(visibleTurnState(usePincerStore.getState())).toBe("running");
 	});
 });
 
@@ -604,7 +460,7 @@ test("cancel requests are sent only for the visible queued or running conversati
 		if (
 			state.view === "chat" &&
 			state.conversationId &&
-			selectVisibleTurnState(state) !== "idle"
+			visibleTurnState(state) !== "idle"
 		) {
 			state.send({
 				v: PROTOCOL_VERSION,
@@ -737,7 +593,7 @@ test("an unavailable Harness cannot be selected", () => {
 		]),
 	);
 
-	usePincerStore.getState().choose("harness", "unavailable");
+	usePincerStore.getState().chooseCfgValue("harness", "unavailable");
 
 	expect(usePincerStore.getState().draft.harnessId).toBe("available");
 });
@@ -762,29 +618,29 @@ test("model switches enforce catalog efforts while retaining opaque selections",
 	apply(welcome([selectable]));
 
 	const state = usePincerStore.getState();
-	state.choose("effort", "high");
-	state.choose("model", "excluding-model");
+	state.chooseCfgValue("effort", "high");
+	state.chooseCfgValue("model", "excluding-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
 		model: "excluding-model",
 		effort: "",
 	});
 
-	state.choose("effort", "low");
-	state.choose("model", "supported-model");
+	state.chooseCfgValue("effort", "low");
+	state.chooseCfgValue("model", "supported-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
 		model: "supported-model",
 		effort: "low",
 	});
 
-	state.choose("effort", "quantum");
-	state.choose("model", "no-effort-model");
+	state.chooseCfgValue("effort", "quantum");
+	state.chooseCfgValue("model", "no-effort-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
 		model: "no-effort-model",
 		effort: "",
 	});
 
-	state.choose("effort", "quantum");
-	state.choose("model", "future-model");
+	state.chooseCfgValue("effort", "quantum");
+	state.chooseCfgValue("model", "future-model");
 	expect(usePincerStore.getState().draft).toMatchObject({
 		model: "future-model",
 		effort: "quantum",
@@ -828,7 +684,7 @@ test("switching Harness selects its CLI-default model and clears effort", () => 
 	});
 	apply(welcome([source, destination]));
 
-	usePincerStore.getState().choose("harness", "destination");
+	usePincerStore.getState().chooseCfgValue("harness", "destination");
 
 	expect(usePincerStore.getState().draft).toEqual({
 		harnessId: "destination",
@@ -960,7 +816,7 @@ describe("overlay settings acknowledgements", () => {
 		});
 		usePincerStore
 			.getState()
-			.prepareSettings("/app", "http://localhost:5173", null);
+			.setAppIdentity("/app", "http://localhost:5173", null);
 		apply({
 			v: PROTOCOL_VERSION,
 			type: "overlay_settings",
@@ -1078,7 +934,7 @@ describe("overlay settings acknowledgements", () => {
 		usePincerStore.setState({ connected: true, send: () => {} });
 		usePincerStore
 			.getState()
-			.prepareSettings("/app", "http://localhost:5173", null);
+			.setAppIdentity("/app", "http://localhost:5173", null);
 		apply({
 			v: PROTOCOL_VERSION,
 			type: "overlay_settings",

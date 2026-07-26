@@ -2,7 +2,7 @@ import type { HarnessDescriptor } from "@pincer/core";
 import { claudeHarness } from "./claude";
 import { codexHarness } from "./codex";
 import { ompHarness } from "./omp";
-import { HarnessRunner } from "./runner";
+import { HarnessRunner } from "./runner/harnessRunner";
 import type {
 	HarnessDefinition,
 	HarnessRuntimeContext,

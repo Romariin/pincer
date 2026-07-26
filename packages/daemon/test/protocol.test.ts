@@ -1,11 +1,11 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-	PROTOCOL_VERSION,
 	type ClientMessage,
 	type ConversationConfig,
+	PROTOCOL_VERSION,
 } from "@pincer/core";
 import { createHarness, type Harness } from "./harness";
 
@@ -112,9 +112,13 @@ test("an incompatible client protocol closes the socket", async () => {
 	const socket = new WebSocket(`ws://127.0.0.1:${harness.port}`);
 	await new Promise<void>((resolve, reject) => {
 		socket.addEventListener("open", () => resolve(), { once: true });
-		socket.addEventListener("error", () => reject(new Error("WebSocket failed")), {
-			once: true,
-		});
+		socket.addEventListener(
+			"error",
+			() => reject(new Error("WebSocket failed")),
+			{
+				once: true,
+			},
+		);
 	});
 	const closed = new Promise<CloseEvent>((resolve) =>
 		socket.addEventListener("close", resolve, { once: true }),

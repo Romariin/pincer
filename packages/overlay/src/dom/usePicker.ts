@@ -4,8 +4,8 @@ import { usePincerStore } from "@/state/store";
 import { copyElementReference, place, type Rect } from "./picker";
 
 export interface PickerLayerState {
-  hoverRect: Rect | null;
-  selectionRects: Array<{ id: number; rect: Rect }>;
+	hoverRect: Rect | null;
+	selectionRects: Array<{ id: number; rect: Rect }>;
 }
 
 /**
@@ -15,67 +15,73 @@ export interface PickerLayerState {
  * host element).
  */
 export function usePicker(): PickerLayerState {
-  const { host } = useRoot();
-  const selecting = usePincerStore((s) => s.selecting);
-  const selections = usePincerStore((s) => s.selections);
-  const [hoverRect, setHoverRect] = useState<Rect | null>(null);
-  const [selectionRects, setSelectionRects] = useState<Array<{ id: number; rect: Rect }>>([]);
+	const { host } = useRoot();
+	const selecting = usePincerStore((s) => s.selecting);
+	const selections = usePincerStore((s) => s.selections);
+	const [hoverRect, setHoverRect] = useState<Rect | null>(null);
+	const [selectionRects, setSelectionRects] = useState<
+		Array<{ id: number; rect: Rect }>
+	>([]);
 
-  const recomputeSelections = useCallback(() => {
-    setSelectionRects(usePincerStore.getState().selections.map((s) => ({ id: s.id, rect: place(s.domEl) })));
-  }, []);
+	const recomputeSelections = useCallback(() => {
+		setSelectionRects(
+			usePincerStore
+				.getState()
+				.selections.map((s) => ({ id: s.id, rect: place(s.domEl) })),
+		);
+	}, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Selection changes require recomputing their live DOM rectangles.
-  useEffect(() => {
-    recomputeSelections();
-  }, [selections, recomputeSelections]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Selection changes require recomputing their live DOM rectangles.
+	useEffect(() => {
+		recomputeSelections();
+	}, [selections, recomputeSelections]);
 
-  useEffect(() => {
-    if (!selecting) setHoverRect(null);
-  }, [selecting]);
+	useEffect(() => {
+		if (!selecting) setHoverRect(null);
+	}, [selecting]);
 
-  useEffect(() => {
-    const overlayTarget = (e: Event): HTMLElement | null => {
-      const path = e.composedPath();
-      const target = path[0];
-      if (!(target instanceof HTMLElement) || path.includes(host)) return null;
-      return target;
-    };
+	useEffect(() => {
+		const overlayTarget = (e: Event): HTMLElement | null => {
+			const path = e.composedPath();
+			const target = path[0];
+			if (!(target instanceof HTMLElement) || path.includes(host)) return null;
+			return target;
+		};
 
-    const onMove = (e: MouseEvent): void => {
-      if (!usePincerStore.getState().selecting) return;
-      const target = overlayTarget(e);
-      setHoverRect(target ? place(target) : null);
-    };
-    const onClick = (e: MouseEvent): void => {
-      const state = usePincerStore.getState();
-      if (!state.selecting) return;
-      const target = overlayTarget(e);
-      if (!target) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (state.referenceCopyStatus === "selecting") {
-        void copyElementReference(target).then(
-          () => state.finishCopyingReference("copied"),
-          () => state.finishCopyingReference("error"),
-        );
-        return;
-      }
-      state.toggleSelect(target);
-    };
-    const onReposition = (): void => recomputeSelections();
+		const onMove = (e: MouseEvent): void => {
+			if (!usePincerStore.getState().selecting) return;
+			const target = overlayTarget(e);
+			setHoverRect(target ? place(target) : null);
+		};
+		const onClick = (e: MouseEvent): void => {
+			const state = usePincerStore.getState();
+			if (!state.selecting) return;
+			const target = overlayTarget(e);
+			if (!target) return;
+			e.preventDefault();
+			e.stopPropagation();
+			if (state.referenceCopyStatus === "selecting") {
+				void copyElementReference(target).then(
+					() => state.finishCopyingReference("copied"),
+					() => state.finishCopyingReference("error"),
+				);
+				return;
+			}
+			state.toggleSelect(target);
+		};
+		const onReposition = (): void => recomputeSelections();
 
-    window.addEventListener("mousemove", onMove, true);
-    window.addEventListener("click", onClick, true);
-    window.addEventListener("scroll", onReposition, true);
-    window.addEventListener("resize", onReposition, true);
-    return () => {
-      window.removeEventListener("mousemove", onMove, true);
-      window.removeEventListener("click", onClick, true);
-      window.removeEventListener("scroll", onReposition, true);
-      window.removeEventListener("resize", onReposition, true);
-    };
-  }, [host, recomputeSelections]);
+		window.addEventListener("mousemove", onMove, true);
+		window.addEventListener("click", onClick, true);
+		window.addEventListener("scroll", onReposition, true);
+		window.addEventListener("resize", onReposition, true);
+		return () => {
+			window.removeEventListener("mousemove", onMove, true);
+			window.removeEventListener("click", onClick, true);
+			window.removeEventListener("scroll", onReposition, true);
+			window.removeEventListener("resize", onReposition, true);
+		};
+	}, [host, recomputeSelections]);
 
-  return { hoverRect, selectionRects };
+	return { hoverRect, selectionRects };
 }

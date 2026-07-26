@@ -1,10 +1,10 @@
 {
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "composite": true,
-    "outDir": "dist",
-    "types": ["node"]
-  },
-  "references": [{ "path": "../core" }, { "path": "../overlay" }],
-  "include": ["src", "test"]
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"composite": true,
+		"outDir": "dist",
+		"types": ["node"]
+	},
+	"references": [{ "path": "../core" }, { "path": "../overlay" }],
+	"include": ["src", "test"]
 }
