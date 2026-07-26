@@ -233,6 +233,50 @@ const LOCAL_URL_RE =
 // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes are control chars by definition.
 const ANSI_RE = /\u001b\[[0-9;]*m/g;
 
+export function formatReadyBanner(
+	proxyUrl: string,
+	target: string,
+	color: boolean,
+): string {
+	const proxyRow = `  ${proxyUrl}`;
+	const upstreamText = `Upstream dev server: ${target}`;
+	const upstreamRow = `  ${upstreamText}`;
+	const rows = [
+		"",
+		"  Open this URL (Pincer proxy):",
+		proxyRow,
+		"",
+		upstreamRow,
+		"",
+	];
+	const innerWidth = Math.max(44, ...rows.map((row) => row.length + 2));
+	const top = `╭─ PINCER ACTIVE ${"─".repeat(innerWidth - 16)}╮`;
+	const bottom = `╰${"─".repeat(innerWidth)}╯`;
+
+	if (!color) {
+		return [
+			top,
+			...rows.map((row) => `│${row.padEnd(innerWidth)}│`),
+			bottom,
+		].join("\n");
+	}
+
+	const reset = "\u001b[0m";
+	const frame = "\u001b[95m";
+	const title = "\u001b[1;95m";
+	const primary = "\u001b[1;4;96m";
+	const secondary = "\u001b[2m";
+	const paddedRows = rows.map((row) => row.padEnd(innerWidth));
+	paddedRows[2] = `  ${primary}${proxyUrl}${reset}${" ".repeat(innerWidth - proxyRow.length)}`;
+	paddedRows[4] = `  ${secondary}${upstreamText}${reset}${" ".repeat(innerWidth - upstreamRow.length)}`;
+
+	return [
+		`${frame}╭─${reset} ${title}PINCER ACTIVE${reset} ${frame}${"─".repeat(innerWidth - 16)}╮${reset}`,
+		...paddedRows.map((row) => `${frame}│${reset}${row}${frame}│${reset}`),
+		`${frame}${bottom}${reset}`,
+	].join("\n");
+}
+
 export function findLocalUrl(text: string): string | null {
 	const match = text.replace(ANSI_RE, "").match(LOCAL_URL_RE);
 	if (!match) return null;
@@ -407,6 +451,10 @@ export async function runDev(opts: DevOptions): Promise<void> {
 	}
 
 	console.log(
-		`\n  pincer ready → open http://localhost:${proxy.port}  (proxying ${target})\n`,
+		`\n${formatReadyBanner(
+			`http://localhost:${proxy.port}`,
+			target,
+			Boolean(process.stdout.isTTY) && process.env.NO_COLOR === undefined,
+		)}\n`,
 	);
 }

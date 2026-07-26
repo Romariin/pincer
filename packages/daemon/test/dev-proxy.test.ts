@@ -2,9 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import type { Server } from "bun";
 import {
 	findLocalUrl,
+	formatReadyBanner,
 	injectHtml,
-	startDevProxy,
 	type RunningProxy,
+	startDevProxy,
 } from "../src/dev";
 
 let upstream: Server<{ dummy?: true }> | undefined;
@@ -157,4 +158,58 @@ test("findLocalUrl matches plain, ANSI-colored, and 0.0.0.0 URLs", () => {
 		"http://127.0.0.1:8080",
 	);
 	expect(findLocalUrl("compiling...")).toBeNull();
+});
+
+test("formatReadyBanner returns the exact plain banner", () => {
+	const proxyUrl = "http://localhost:4321";
+	const target = "http://upstream";
+	const rows = [
+		"",
+		"  Open this URL (Pincer proxy):",
+		`  ${proxyUrl}`,
+		"",
+		`  Upstream dev server: ${target}`,
+		"",
+	];
+	const expected = [
+		`╭─ PINCER ACTIVE ${"─".repeat(28)}╮`,
+		...rows.map((row) => `│${row.padEnd(44)}│`),
+		`╰${"─".repeat(44)}╯`,
+	].join("\n");
+
+	const banner = formatReadyBanner(proxyUrl, target, false);
+
+	expect(banner).toBe(expected);
+	expect(banner).not.toContain("\u001b");
+});
+
+test("formatReadyBanner colors decoration without changing the text", () => {
+	const proxyUrl = "http://localhost:4321";
+	const target = "http://upstream";
+	const plain = formatReadyBanner(proxyUrl, target, false);
+	const colored = formatReadyBanner(proxyUrl, target, true);
+
+	// The proxy URL is the one thing the user must act on, so it gets the loudest style.
+	expect(colored).toContain(`\u001b[1;4;96m${proxyUrl}\u001b[0m`);
+	// The upstream is context only, so it stays dimmed.
+	expect(colored).toContain(`\u001b[2mUpstream dev server: ${target}\u001b[0m`);
+	// Color is decoration: stripping it must reproduce the plain banner exactly.
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes are control chars by definition.
+	expect(colored.replace(/\u001b\[[0-9;]*m/g, "")).toBe(plain);
+});
+
+test("formatReadyBanner expands to contain a long upstream URL", () => {
+	const proxyUrl = "http://localhost:4321";
+	const target = `http://127.0.0.1:5173/${"nested/".repeat(12)}app`;
+	const plain = formatReadyBanner(proxyUrl, target, false);
+	const stripped = formatReadyBanner(proxyUrl, target, true).replace(
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes are control chars by definition.
+		/\u001b\[[0-9;]*m/g,
+		"",
+	);
+	const lineLengths = stripped.split("\n").map((line) => line.length);
+
+	expect(stripped).toBe(plain);
+	expect(lineLengths.every((length) => length === lineLengths[0])).toBe(true);
+	expect(lineLengths[0]).toBeGreaterThan(46);
 });

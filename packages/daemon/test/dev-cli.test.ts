@@ -18,7 +18,10 @@ async function waitForProxyUrl(
 					`Pincer exited before becoming ready. Output: ${output}`,
 				);
 			output += decoder.decode(value, { stream: true });
-			const match = /pincer ready → open http:\/\/localhost:(\d+)/.exec(output);
+			// Anchor on the banner title, not its box-drawing: padding is cosmetic.
+			const match = /PINCER ACTIVE[\s\S]*?http:\/\/localhost:(\d+)/.exec(
+				output,
+			);
 			const port = Number(match?.[1]);
 			if (Number.isInteger(port) && port > 0) return port;
 		}
