@@ -102,7 +102,7 @@ export function Composer(): ReactNode {
 	};
 
 	return (
-		<div className="shrink-0 px-3 pb-3.5 pt-2">
+		<div className="shrink-0 px-3 pb-2.5 pt-2">
 			<Textarea
 				ref={taRef}
 				rows={3}

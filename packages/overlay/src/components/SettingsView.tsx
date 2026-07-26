@@ -49,7 +49,7 @@ export function SettingsView(): ReactNode {
   };
 
   return (
-    <div className="pcr-scroll min-h-0 flex-1 overflow-y-auto p-4">
+    <div className="pcr-scroll min-h-0 flex-1 overflow-y-auto p-4 pt-[52px]">
       <div className="space-y-6">
         <section aria-labelledby="pincer-shortcut-heading" className="space-y-3">
           <div className="space-y-1">

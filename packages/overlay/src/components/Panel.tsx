@@ -1,8 +1,9 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { usePincerStore } from "@/state/store";
 import { matchesShortcut } from "@/lib/shortcut";
-import { GAP, PANEL_W } from "@/lib/constants";
+import { fitPanelWidth } from "@/lib/panelWidth";
 import { Header } from "./Header";
+import { ResizeHandle } from "./ResizeHandle";
 import { CommandBar } from "./CommandBar";
 import { ListView } from "./ListView";
 import { ChatView } from "./ChatView";
@@ -14,24 +15,50 @@ import { OverlayContainerProvider } from "@/context/overlay";
 
 export function Panel(): ReactNode {
   const panelOpen = usePincerStore((s) => s.panelOpen);
+  const panelWidth = usePincerStore((s) => s.panelWidth);
+  const resizing = usePincerStore((s) => s.resizingPanel);
   const view = usePincerStore((s) => s.view);
   const pickerContainer = useRef<HTMLDivElement>(null);
-  const prevMargin = useRef("");
-  const prevTransition = useRef("");
+  const pushed = useRef({ margin: "", transform: "", transition: "", ownMargin: 0 });
 
-  // Margin-push side effect: shove the host page left while the panel is open (verbatim port).
+  // Push side effect: narrow the host page while the panel is open. The transform makes
+  // <body> the containing block of its fixed/absolute descendants, so app headers, modals
+  // and toasts move aside too instead of sliding under the panel. Capture/restore lives in
+  // its own effect so a width change never records our own values as the page's.
   useEffect(() => {
-    const root = document.documentElement;
-    if (panelOpen) {
-      prevMargin.current = root.style.marginRight;
-      prevTransition.current = root.style.transition;
-      root.style.transition = "margin-right 0.5s cubic-bezier(.32,.72,0,1)";
-      root.style.marginRight = `${window.innerWidth < 600 ? 0 : PANEL_W + GAP * 2}px`;
-    } else {
-      root.style.marginRight = prevMargin.current;
-      root.style.transition = prevTransition.current;
-    }
+    if (!panelOpen) return;
+    const body = document.body;
+    pushed.current = {
+      margin: body.style.marginRight,
+      transform: body.style.transform,
+      transition: body.style.transition,
+      // Keep whatever right margin the page already had; ours stacks on top of it.
+      ownMargin: Number.parseFloat(getComputedStyle(body).marginRight) || 0,
+    };
+    return () => {
+      body.style.marginRight = pushed.current.margin;
+      body.style.transform = pushed.current.transform;
+      body.style.transition = pushed.current.transition;
+    };
   }, [panelOpen]);
+
+  // Keep the push in sync with the panel's width; drags skip the easing so the page tracks the cursor.
+  useEffect(() => {
+    if (!panelOpen) return;
+    const body = document.body;
+    const apply = (): void => {
+      body.style.transition = resizing ? "none" : "margin-right 0.5s cubic-bezier(.32,.72,0,1)";
+      body.style.transform = "translateX(0)";
+      // The sidebar is flush against the edge, so the push equals its width exactly:
+      // nothing of the host page ends up underneath it.
+      const push =
+        window.innerWidth < 600 ? 0 : fitPanelWidth(panelWidth, window.innerWidth);
+      body.style.marginRight = `${pushed.current.ownMargin + push}px`;
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+  }, [panelOpen, panelWidth, resizing]);
 
   // Global toggle key + Escape handling (capture phase, so it wins over the host page).
   useEffect(() => {
@@ -56,36 +83,38 @@ export function Panel(): ReactNode {
 
   const style: CSSProperties = {
     position: "fixed",
-    top: GAP,
-    right: GAP,
-    bottom: GAP,
-    width: PANEL_W,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: panelWidth,
+    maxWidth: "100vw",
     zIndex: 2147483647,
-    transform: panelOpen ? "none" : `translateX(calc(100% + ${GAP * 2}px))`,
+    transform: panelOpen ? "none" : "translateX(100%)",
     opacity: panelOpen ? 1 : 0,
     pointerEvents: panelOpen ? "auto" : "none",
-    transition: "transform .5s cubic-bezier(.32,.72,0,1),opacity .35s ease",
+    transition: resizing ? "none" : "transform .5s cubic-bezier(.32,.72,0,1),opacity .35s ease",
     fontSize: 14,
     letterSpacing: "-0.006em",
   };
 
   return (
     <div
-      className="pcr-panel flex flex-col overflow-hidden rounded-[20px] border border-border bg-background font-sans text-foreground shadow-2xl"
+      className="pcr-panel flex flex-col overflow-hidden border-border border-l bg-background font-sans text-foreground"
       style={style}
     >
       <OverlayContainerProvider value={pickerContainer}>
+        <ResizeHandle />
         <Header />
         {view === "settings" ? (
           <SettingsView />
         ) : (
           <>
-            <CommandBar />
             <div className="flex min-h-0 flex-1 flex-col">
               {view === "list" ? <ListView /> : <ChatView />}
             </div>
             <Tray />
             <Composer />
+            <CommandBar />
           </>
         )}
         <div ref={pickerContainer} className="pointer-events-none absolute inset-0 contain-layout" />

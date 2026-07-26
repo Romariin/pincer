@@ -15,6 +15,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { buildDomContext, resolveSource } from "@/dom/picker";
 import { harnessInfo } from "@/lib/harness";
+import { clampPanelWidth, loadPanelWidth, savePanelWidth } from "@/lib/panelWidth";
 import {
 	assistantMsg,
 	type Cfg,
@@ -74,6 +75,8 @@ export interface PincerStore {
 	connected: boolean;
 	view: View;
 	panelOpen: boolean;
+	panelWidth: number;
+	resizingPanel: boolean;
 	selecting: boolean;
 	picker: PickerKind | null;
 	referenceCopyStatus: ReferenceCopyStatus;
@@ -110,6 +113,8 @@ export interface PincerStore {
 
 	// ---- UI ops ----
 	setPanelOpen: (open: boolean) => void;
+	setPanelWidth: (width: number) => void;
+	setResizingPanel: (resizing: boolean) => void;
 	setView: (view: View) => void;
 	openPicker: (kind: PickerKind) => void;
 	openSettings: () => void;
@@ -272,6 +277,8 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		connected: false,
 		view: "list",
 		panelOpen: false,
+		panelWidth: loadPanelWidth(),
+		resizingPanel: false,
 		selecting: false,
 		picker: null,
 		referenceCopyStatus: "idle",
@@ -328,6 +335,13 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 				});
 			}
 		},
+		setPanelWidth: (width) => {
+			const panelWidth = clampPanelWidth(width);
+			if (panelWidth === get().panelWidth) return;
+			set({ panelWidth });
+			savePanelWidth(panelWidth);
+		},
+		setResizingPanel: (resizingPanel) => set({ resizingPanel }),
 		setView: (view) =>
 			set((state) => ({
 				view,

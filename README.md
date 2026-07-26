@@ -87,3 +87,21 @@ bun run lint        # Biome's recommended lint rules across the monorepo
 bun run typecheck   # tsc -b across all packages
 bun test            # daemon protocol suite + adapter transform + core round-trip
 ```
+
+### Working on the overlay from another app
+
+When `pincer` runs from this checkout (`bun link`, or `bun run --cwd packages/daemon`),
+`pincer -- <command>` treats `packages/overlay` as live source:
+
+- the bundle is re-read from `packages/overlay/dist/overlay.js` on every request,
+  so a rebuild lands without restarting `pincer`;
+- `vite build --watch` runs alongside the wrapped dev server, so editing
+  `packages/overlay/src` rebuilds automatically;
+- the injected page subscribes to `/__pincer/reload` and reloads itself once the
+  new bundle is on disk.
+
+Editing an overlay file in this repo therefore shows up in the app you are
+running it against, no manual `build:overlay` and no restart. Pass
+`--no-overlay-watch` (or `PINCER_OVERLAY_WATCH=0`) to keep the rebuild watcher
+out of the way; the compiled binary always serves the bundle baked in at build
+time, so neither the watcher nor live reload applies there.

@@ -1,12 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Server } from "bun";
 import {
+	createOutputGate,
 	findLocalUrl,
 	formatReadyBanner,
 	injectHtml,
+	printReadyBanner,
 	type RunningProxy,
 	startDevProxy,
 } from "../src/dev";
+import { staticOverlaySource } from "../src/overlaySource";
 
 let upstream: Server<{ dummy?: true }> | undefined;
 let proxy: RunningProxy | undefined;
@@ -53,7 +56,9 @@ function startProxyFor(server: Server<{ dummy?: true }>): RunningProxy {
 		port: 0,
 		wsUrl: "ws://127.0.0.1:7391",
 		projectRoot: "/tmp/example",
-		overlayBundle: "globalThis.__pincerTestOverlay=true;".repeat(40),
+		overlay: staticOverlaySource(
+			"globalThis.__pincerTestOverlay=true;".repeat(40),
+		),
 	});
 }
 
@@ -97,6 +102,38 @@ test("serves the overlay bundle at /__pincer/overlay.js", async () => {
 	expect((await res.text()).length).toBeGreaterThan(1_000);
 });
 
+test("live reload stays off unless the bundle is watchable", async () => {
+	upstream = startUpstream();
+	proxy = startProxyFor(upstream);
+
+	const html = await (await fetch(`http://127.0.0.1:${proxy.port}/`)).text();
+	expect(html).not.toContain("EventSource");
+	const res = await fetch(`http://127.0.0.1:${proxy.port}/__pincer/reload`);
+	expect(res.status).toBe(404);
+});
+
+test("live reload injects a listener and opens an event stream", async () => {
+	upstream = startUpstream();
+	const bundle = "globalThis.__pincerTestOverlay=true;".repeat(40);
+	proxy = startDevProxy({
+		target: `http://127.0.0.1:${upstream.port}`,
+		port: 0,
+		wsUrl: "ws://127.0.0.1:7391",
+		projectRoot: "/tmp/example",
+		overlay: staticOverlaySource(bundle),
+		liveReload: true,
+	});
+
+	const html = await (await fetch(`http://127.0.0.1:${proxy.port}/`)).text();
+	expect(html).toContain('new EventSource("/__pincer/reload")');
+	expect(html.indexOf("EventSource")).toBeLessThan(html.indexOf("</body>"));
+
+	const res = await fetch(`http://127.0.0.1:${proxy.port}/__pincer/reload`);
+	expect(res.status).toBe(200);
+	expect(res.headers.get("content-type")).toContain("text/event-stream");
+	await res.body?.cancel();
+});
+
 test("proxies WebSocket traffic both ways", async () => {
 	upstream = startUpstream();
 	proxy = startProxyFor(upstream);
@@ -129,7 +166,9 @@ test("returns 502 when the upstream is down", async () => {
 		port: 0,
 		wsUrl: "ws://127.0.0.1:7391",
 		projectRoot: "/tmp/example",
-		overlayBundle: "globalThis.__pincerTestOverlay=true;".repeat(40),
+		overlay: staticOverlaySource(
+			"globalThis.__pincerTestOverlay=true;".repeat(40),
+		),
 	});
 
 	const res = await fetch(`http://127.0.0.1:${proxy.port}/`);
@@ -183,19 +222,195 @@ test("formatReadyBanner returns the exact plain banner", () => {
 	expect(banner).not.toContain("\u001b");
 });
 
-test("formatReadyBanner colors decoration without changing the text", () => {
+const ESC = String.fromCharCode(27);
+const stripAnsi = (text: string): string =>
+	text.replace(new RegExp(`${ESC}\\[[0-9;?]*[a-zA-Z]`, "g"), "");
+
+test("formatReadyBanner paints the gradient without changing the text", () => {
 	const proxyUrl = "http://localhost:4321";
 	const target = "http://upstream";
 	const plain = formatReadyBanner(proxyUrl, target, false);
 	const colored = formatReadyBanner(proxyUrl, target, true);
 
-	// The proxy URL is the one thing the user must act on, so it gets the loudest style.
-	expect(colored).toContain(`\u001b[1;4;96m${proxyUrl}\u001b[0m`);
-	// The upstream is context only, so it stays dimmed.
-	expect(colored).toContain(`\u001b[2mUpstream dev server: ${target}\u001b[0m`);
+	// The proxy URL is the one thing the user must act on: bold + underlined.
+	expect(colored).toContain(`${ESC}[1;4m${ESC}[38;2;`);
+	// The upstream is context only, so it stays dimmed and out of the gradient.
+	expect(colored).toContain(`${ESC}[2mUpstream dev server: ${target}${ESC}[0m`);
+	// Several distinct colors, i.e. a gradient rather than one flat fill.
+	const colors = new Set(colored.match(/38;2;\d+;\d+;\d+/g) ?? []);
+	expect(colors.size).toBeGreaterThan(8);
 	// Color is decoration: stripping it must reproduce the plain banner exactly.
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes are control chars by definition.
-	expect(colored.replace(/\u001b\[[0-9;]*m/g, "")).toBe(plain);
+	expect(stripAnsi(colored)).toBe(plain);
+});
+
+test("formatReadyBanner keeps greens and cyans out of the gradient", () => {
+	const args = ["http://localhost:4321", "http://upstream", true] as const;
+	// Sweep the whole wave, not just the resting frame.
+	const phases = [0, 0.17, 0.33, 0.5, 0.66, 0.83];
+	const channels = phases.flatMap((phase) =>
+		(
+			formatReadyBanner(...args, { phase }).match(/38;2;\d+;\d+;\d+/g) ?? []
+		).map((code) => code.split(";").slice(2).map(Number)),
+	);
+
+	expect(channels.length).toBeGreaterThan(50);
+	for (const [r = 0, g = 0, b = 0] of channels) {
+		// Green only ever shows up as the orange end of the arc (red at full).
+		expect(g === 0 || r === 255).toBe(true);
+		// Cyan would need green and blue together; the arc never goes there.
+		expect(g > 0 && b > 0).toBe(false);
+	}
+});
+
+test("formatReadyBanner falls back to the 256-color arc", () => {
+	const banner = formatReadyBanner("http://localhost:4321", "http://up", true, {
+		truecolor: false,
+	});
+	const codes = new Set(
+		(banner.match(/38;5;(\d+)/g) ?? []).map((code) => Number(code.slice(5))),
+	);
+
+	expect(banner).not.toContain("38;2;");
+	expect(codes.size).toBeGreaterThan(8);
+	for (const code of codes) {
+		// Codes 16..231 are a 6x6x6 cube indexed as 16 + 36r + 6g + b.
+		const cube = code - 16;
+		const r = Math.floor(cube / 36);
+		const g = Math.floor((cube % 36) / 6);
+		const b = cube % 6;
+		expect(code).toBeGreaterThan(15);
+		expect(code).toBeLessThan(232);
+		// Green-dominant and cyan-ish cube cells are what looks cheap; the arc
+		// never picks one.
+		expect(g > r && g > b).toBe(false);
+		expect(g === b && g > r).toBe(false);
+	}
+});
+
+test("formatReadyBanner phase shifts the hues but not the text", () => {
+	const args = ["http://localhost:4321", "http://upstream", true] as const;
+	const first = formatReadyBanner(...args, { phase: 0 });
+	const later = formatReadyBanner(...args, { phase: 0.3 });
+
+	expect(later).not.toBe(first);
+	expect(stripAnsi(later)).toBe(stripAnsi(first));
+});
+
+test("formatReadyBanner reveal blanks trailing columns at full width", () => {
+	const args = ["http://localhost:4321", "http://upstream", true] as const;
+	const plain = formatReadyBanner(...args, {}).length;
+	const partial = stripAnsi(formatReadyBanner(...args, { reveal: 12 }));
+	const lines = partial.split("\n");
+	const full = stripAnsi(formatReadyBanner(...args, {})).split("\n");
+
+	expect(plain).toBeGreaterThan(0);
+	// Alignment is preserved: only the glyphs disappear, never the columns.
+	expect(lines.map((line) => line.length)).toEqual(
+		full.map((line) => line.length),
+	);
+	for (const [i, line] of lines.entries()) {
+		expect(line.slice(0, 12)).toBe((full[i] ?? "").slice(0, 12));
+		expect(line.slice(12).trim()).toBe("");
+	}
+});
+
+test("printReadyBanner prints one static banner when not animating", async () => {
+	const chunks: string[] = [];
+	await printReadyBanner({
+		proxyUrl: "http://localhost:4321",
+		target: "http://upstream",
+		color: false,
+		animate: true,
+		write: (chunk) => chunks.push(chunk),
+	});
+
+	const out = chunks.join("");
+	expect(out).toBe(
+		`\n${formatReadyBanner("http://localhost:4321", "http://upstream", false)}\n\n`,
+	);
+	expect(out).not.toContain(ESC);
+});
+
+test("printReadyBanner animates in place and restores the cursor", async () => {
+	const chunks: string[] = [];
+	const waits: number[] = [];
+	await printReadyBanner({
+		proxyUrl: "http://localhost:4321",
+		target: "http://upstream",
+		color: true,
+		animate: true,
+		frames: 4,
+		intervalMs: 7,
+		write: (chunk) => chunks.push(chunk),
+		sleep: async (ms) => void waits.push(ms),
+	});
+
+	const out = chunks.join("");
+	const plain = formatReadyBanner(
+		"http://localhost:4321",
+		"http://upstream",
+		false,
+	);
+	const plainLines = plain.split("\n");
+	const lineCount = plainLines.length;
+
+	expect(waits).toEqual([7, 7, 7, 7]);
+	// One cursor-up per redraw: 3 repaints plus the final settled frame.
+	expect(out.split(`${ESC}[${lineCount}A`).length - 1).toBe(4);
+	expect(out).toContain(`${ESC}[?25l`);
+	expect(out.endsWith(`${ESC}[?25h\n`)).toBe(true);
+	// Every frame is the same banner, so nothing shifts while it animates.
+	const frames = stripAnsi(out)
+		.split("\n")
+		.filter((line) => line.trim() !== "")
+		.map((line) => line.replace(/^\r/, ""));
+	const widths = new Set(frames.map((line) => line.length));
+	expect(widths.size).toBe(1);
+	// The proxy URL row survives the animation intact.
+	expect(stripAnsi(out)).toContain((plainLines[3] ?? "").trimEnd());
+});
+
+test("createOutputGate buffers child output while held", () => {
+	const written: string[] = [];
+	const realStdout = process.stdout.write.bind(process.stdout);
+	const realStderr = process.stderr.write.bind(process.stderr);
+	const decoder = new TextDecoder();
+	// biome-ignore lint/suspicious/noExplicitAny: stdout.write has overloads we do not need here.
+	process.stdout.write = ((chunk: any) => {
+		written.push(`out:${decoder.decode(chunk)}`);
+		return true;
+		// biome-ignore lint/suspicious/noExplicitAny: same as above.
+	}) as any;
+	// biome-ignore lint/suspicious/noExplicitAny: same as above.
+	process.stderr.write = ((chunk: any) => {
+		written.push(`err:${decoder.decode(chunk)}`);
+		return true;
+		// biome-ignore lint/suspicious/noExplicitAny: same as above.
+	}) as any;
+
+	try {
+		const gate = createOutputGate();
+		const bytes = (text: string) => new TextEncoder().encode(text);
+
+		gate.write("stdout", bytes("before"));
+		gate.hold();
+		gate.write("stdout", bytes("during"));
+		gate.write("stderr", bytes("warn"));
+		expect(written).toEqual(["out:before"]);
+
+		gate.release();
+		expect(written).toEqual(["out:before", "out:during", "err:warn"]);
+
+		// Past the buffer limit the hold gives up rather than eating memory.
+		gate.hold();
+		gate.write("stdout", bytes("x".repeat(300 * 1024)));
+		expect(written.length).toBe(4);
+		gate.write("stdout", bytes("after"));
+		expect(written[4]).toBe("out:after");
+	} finally {
+		process.stdout.write = realStdout;
+		process.stderr.write = realStderr;
+	}
 });
 
 test("formatReadyBanner expands to contain a long upstream URL", () => {

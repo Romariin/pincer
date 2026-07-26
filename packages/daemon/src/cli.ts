@@ -21,6 +21,12 @@ Options:
 Proxy options:
   --proxy-port <n>          Injection proxy port. Default: ${DEFAULT_PROXY_PORT}.
   --target <url>            Upstream dev server URL. Default: auto-detected from the command's output.
+  --no-overlay-watch        Don't rebuild/live-reload the overlay (source checkouts only).
+
+Environment:
+  NO_COLOR=1                Plain, uncolored output.
+  PINCER_NO_ANIMATION=1     Keep the color banner, skip its animated intro.
+  PINCER_OVERLAY_WATCH=0    Same as --no-overlay-watch.
 
 Config file (optional): pincer.config.json in the project root:
   { "port": 7391, "proxyPort": 7392, "harnesses": { "default": "omp", "commands": { "omp": ["omp"], "claude-code": ["bunx", "claude"] } } }
@@ -36,6 +42,7 @@ interface CliArgs {
 	harnessCommand?: string[];
 	command: string[];
 	proxyRequested: boolean;
+	overlayWatch: boolean;
 	help: boolean;
 }
 
@@ -50,6 +57,7 @@ function parseArgs(argv: string[]): CliArgs {
 		project: process.cwd(),
 		command: [],
 		proxyRequested: false,
+		overlayWatch: true,
 		help: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
@@ -79,6 +87,9 @@ function parseArgs(argv: string[]): CliArgs {
 			}
 			case "--target":
 				args.target = argv[++i];
+				break;
+			case "--no-overlay-watch":
+				args.overlayWatch = false;
 				break;
 			case "--harness":
 				args.harnessId = argv[++i];
@@ -191,8 +202,10 @@ if (args.help) {
 	process.exit(0);
 }
 
+// Startup notes are progress, not failures: terminals that tint stderr red made
+// a normal boot look like a stack of errors.
 const log = (msg: string): void => {
-	console.error(`[pincer] ${msg}`);
+	console.log(`[pincer] ${msg}`);
 };
 
 const projectRoot = resolve(args.project);
@@ -240,6 +253,7 @@ try {
 			selectedHarnessId,
 			harnessCommands,
 			log,
+			overlayWatch: args.overlayWatch,
 			signal: startupAbort.signal,
 			...(process.env.PINCER_OVERLAY_BUNDLE === undefined
 				? {}

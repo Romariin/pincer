@@ -100,7 +100,7 @@ export function ListView(): ReactNode {
 
 	if (conversations.length === 0) {
 		return (
-			<div className="pcr-scroll flex-1 overflow-y-auto px-2 pb-2.5 pt-2">
+			<div className="pcr-scroll flex-1 overflow-y-auto px-2 pb-2.5 pt-[52px]">
 				<div className="px-[30px] py-[60px] text-center text-[13.5px] leading-[1.6] text-muted-foreground">
 					No conversations yet.
 					<br />

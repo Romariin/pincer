@@ -46,7 +46,7 @@ export function ChatView(): ReactNode {
 		<MessageScrollerProvider>
 			<MessageScroller>
 				<MessageScrollerViewport>
-					<MessageScrollerContent className="gap-[18px] px-[14px] pb-2 pt-4">
+					<MessageScrollerContent className="gap-[18px] px-[14px] pb-2 pt-[52px]">
 						{messages.map((m, i) => (
 							<MessageScrollerItem
 								key={m.id}

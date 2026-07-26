@@ -40,9 +40,10 @@ export function Tray(): ReactNode {
           : "Copy reference";
 
   return (
-    <div className="flex min-h-[40px] shrink-0 items-center gap-2 px-3 pb-0.5 pt-1.5">
+    <div className="shrink-0 px-3 pb-0.5 pt-1.5">
+      {/* Selected elements live on their own row, in a recessed strip above the actions. */}
       {has ? (
-        <div className="relative min-w-0 flex-1">
+        <div className="relative mb-1.5 rounded-[10px] bg-muted px-2 py-1.5">
           <div
             ref={scrollRef}
             onScroll={updateFades}
@@ -52,13 +53,14 @@ export function Tray(): ReactNode {
               <span
                 key={sel.id}
                 style={{ fontFamily: MONO }}
-                className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] border border-primary/40 bg-primary/15 py-1 pl-2 pr-1 text-xs text-primary"
+                className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] border border-border/60 bg-background py-1 pl-2 pr-1 text-xs text-primary"
               >
                 {breadcrumb(sel.domEl)}
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="size-4 rounded-full text-primary hover:bg-primary/25 hover:text-primary"
+                  className="size-4 rounded-full text-primary hover:bg-primary/15 hover:text-primary"
+                  aria-label="Remove element"
                   onClick={() => removeSelection(sel.domEl)}
                 >
                   <XIcon />
@@ -67,41 +69,42 @@ export function Tray(): ReactNode {
             ))}
           </div>
           {fades.left && (
-            <span className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-background to-transparent" />
+            <span className="pointer-events-none absolute inset-y-0 left-0 w-6 rounded-l-[10px] bg-gradient-to-r from-muted to-transparent" />
           )}
           {fades.right && (
-            <span className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-background to-transparent" />
+            <span className="pointer-events-none absolute inset-y-0 right-0 w-6 rounded-r-[10px] bg-gradient-to-l from-muted to-transparent" />
           )}
         </div>
-      ) : (
-        <span className="flex-1 text-[13px] text-muted-foreground">No elements selected</span>
-      )}
-      <Button
-        variant={copying ? "default" : "ghost"}
-        size="sm"
-        className="shrink-0 gap-1.5 text-[13px]"
-        aria-label={copying ? "Cancel copying element reference" : "Copy element reference"}
-        title={copying ? "Cancel" : "Pick an element and copy its source reference"}
-        onClick={() => (copying ? setSelecting(false) : startCopyingReference())}
-      >
-        {referenceCopyStatus === "copied" ? (
-          <CheckIcon />
-        ) : referenceCopyStatus === "error" ? (
-          <TriangleAlertIcon />
-        ) : (
-          <CopyIcon />
-        )}
-        <span aria-live="polite">{copyLabel}</span>
-      </Button>
-      <Button
-        variant={attaching ? "default" : "secondary"}
-        size="sm"
-        className="shrink-0 gap-1.5 text-[13px]"
-        onClick={() => setSelecting(!attaching)}
-      >
-        <PlusIcon />
-        Add element
-      </Button>
+      ) : null}
+      <div className="flex items-center justify-end gap-1">
+        <Button
+          variant={copying ? "default" : "ghost"}
+          size="icon"
+          aria-label={copying ? "Cancel copying element reference" : "Copy element reference"}
+          title={copying ? "Cancel" : "Pick an element and copy its source reference"}
+          onClick={() => (copying ? setSelecting(false) : startCopyingReference())}
+        >
+          {referenceCopyStatus === "copied" ? (
+            <CheckIcon />
+          ) : referenceCopyStatus === "error" ? (
+            <TriangleAlertIcon />
+          ) : (
+            <CopyIcon />
+          )}
+          <span className="sr-only" aria-live="polite">
+            {copyLabel}
+          </span>
+        </Button>
+        <Button
+          variant={attaching ? "default" : "ghost"}
+          size="sm"
+          className="gap-1.5 text-[13px]"
+          onClick={() => setSelecting(!attaching)}
+        >
+          <PlusIcon />
+          Add element
+        </Button>
+      </div>
     </div>
   );
 }

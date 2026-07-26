@@ -9,29 +9,37 @@ export function Header(): ReactNode {
   const setPanelOpen = usePincerStore((s) => s.setPanelOpen);
   const openSettings = usePincerStore((s) => s.openSettings);
 
+  // Floating controls: no bar, no title. The container ignores pointer events so the
+  // view underneath stays clickable everywhere except on the buttons themselves.
   return (
-    <div className="flex shrink-0 items-center gap-[9px] border-b border-border p-3">
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-[9px] p-3">
       {(view === "chat" || view === "settings") && (
         <Button
           variant="outline"
           size="icon"
+          className="pointer-events-auto bg-background"
           aria-label="Back to conversations"
           onClick={() => setView("list")}
         >
           <ChevronLeftIcon />
         </Button>
       )}
-      <span className="text-[17px] leading-none">🦀</span>
-      <span className="text-base font-bold">Pincer</span>
       <span className="flex-1" />
       {view !== "settings" && (
-        <Button variant="outline" size="icon" aria-label="Open settings" onClick={openSettings}>
+        <Button
+          variant="outline"
+          size="icon"
+          className="pointer-events-auto bg-background"
+          aria-label="Open settings"
+          onClick={openSettings}
+        >
           <SettingsIcon />
         </Button>
       )}
       <Button
         variant="outline"
         size="icon"
+        className="pointer-events-auto bg-background"
         aria-label="Close Pincer"
         onClick={() => setPanelOpen(false)}
       >

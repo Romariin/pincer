@@ -1,13 +1,17 @@
 import { createRoot } from "react-dom/client";
 import overlayCss from "./overlay.css?inline";
 import { RootProvider } from "./context/root";
+import { followSystemScheme } from "./lib/colorScheme";
 import { App } from "./App";
 
 function mount(): void {
 
   const host = document.createElement("div");
   host.id = "__pincer_root__";
-  document.body.appendChild(host);
+  // Sibling of <body>, not a child of it: the open panel transforms <body> to pull
+  // the host page fully aside, and a transformed ancestor would capture our own
+  // fixed positioning (see components/Panel.tsx).
+  document.documentElement.appendChild(host);
   const shadow = host.attachShadow({ mode: "open" });
 
   // Tailwind v4 emits @property rules; shadow roots ignore @property, so hoist a
@@ -28,6 +32,7 @@ function mount(): void {
 
   const mountNode = document.createElement("div");
   shadow.appendChild(mountNode);
+  followSystemScheme(mountNode);
 
   createRoot(mountNode).render(
     <RootProvider shadowRoot={shadow} host={host}>

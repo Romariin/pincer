@@ -20,7 +20,7 @@ export function CommandBar(): ReactNode {
 		<button
 			type="button"
 			onClick={() => openPicker("harness")}
-			className="flex w-full shrink-0 items-center gap-2 border-b border-border bg-background px-3 py-2.5 text-left text-[12.5px] transition-colors hover:bg-muted/40"
+			className="flex w-full shrink-0 items-center gap-2 border-t border-border bg-background px-3 py-2.5 text-left text-[12.5px] transition-colors hover:bg-muted/40"
 		>
 			<Avatar info={info} size={18} />
 			<span className="shrink-0 font-semibold text-foreground">
