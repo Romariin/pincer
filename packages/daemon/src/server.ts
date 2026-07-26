@@ -15,8 +15,8 @@ import type { Server, ServerWebSocket } from "bun";
 import { Git } from "./git";
 import { harnessDescriptors, resolveHarnesses } from "./harnesses/registry";
 import { isLocalOrigin } from "./localOrigin";
-import type { Emit } from "./orchestrator";
-import { Orchestrator } from "./orchestrator";
+import { Orchestrator } from "./orchestrator/orchestrator";
+import type { Emit } from "./orchestrator/types";
 import {
 	defaultDataRoot,
 	migrateLegacyProjectData,
