@@ -7,6 +7,15 @@ import { PROTOCOL_VERSION } from "@pincer/core";
 
 export type SendFrame = (message: ClientMessage) => void;
 
+/**
+ * A fresh client per call is free — PincerClient holds no state beyond the
+ * send function — and it structurally prevents capturing a stale send across
+ * a reconnect.
+ */
+export function daemon(sendFrame: SendFrame): PincerClient {
+	return new PincerClient(sendFrame);
+}
+
 export class PincerClient {
 	constructor(private readonly sendFrame: SendFrame) {}
 

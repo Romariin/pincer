@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { type Msg, usePincerStore } from "@/state/store";
+import { usePincerStore } from "@/state/store";
+import type { Msg } from "@/state/thread";
 import { Message } from "./Message";
 import {
 	MessageScroller,

@@ -7,7 +7,7 @@ import {
 	modelLabel,
 	modelPickerOptions,
 } from "@/lib/harness";
-import { useCfg, usePincerStore } from "@/state/store";
+import { useActiveCfg, usePincerStore } from "@/state/store";
 import { Avatar } from "./Avatar";
 import { Button } from "./ui/button";
 import {
@@ -43,8 +43,8 @@ function Section({
 function HarnessCombobox({ container }: { container: Container }): ReactNode {
 	const harnesses = usePincerStore((s) => s.harnesses);
 	const harnessMap = usePincerStore((s) => s.harnessMap);
-	const choose = usePincerStore((s) => s.choose);
-	const cfg = useCfg();
+	const choose = usePincerStore((s) => s.chooseCfgValue);
+	const cfg = useActiveCfg();
 	const info = harnessInfo(harnessMap, cfg.harnessId);
 	const value = harnesses.find((h) => h.id === cfg.harnessId) ?? null;
 
@@ -99,8 +99,8 @@ function HarnessCombobox({ container }: { container: Container }): ReactNode {
 
 function ModelCombobox({ container }: { container: Container }): ReactNode {
 	const harnessMap = usePincerStore((s) => s.harnessMap);
-	const choose = usePincerStore((s) => s.choose);
-	const cfg = useCfg();
+	const choose = usePincerStore((s) => s.chooseCfgValue);
+	const cfg = useActiveCfg();
 	const info = harnessInfo(harnessMap, cfg.harnessId);
 	const [query, setQuery] = useState("");
 	const models = modelPickerOptions(info.models, cfg.model, query);
@@ -150,8 +150,8 @@ function ModelCombobox({ container }: { container: Container }): ReactNode {
 
 function EffortCombobox({ container }: { container: Container }): ReactNode {
 	const harnessMap = usePincerStore((s) => s.harnessMap);
-	const choose = usePincerStore((s) => s.choose);
-	const cfg = useCfg();
+	const choose = usePincerStore((s) => s.chooseCfgValue);
+	const cfg = useActiveCfg();
 	const info = harnessInfo(harnessMap, cfg.harnessId);
 	const [query, setQuery] = useState("");
 	const options = effortPickerOptions(
@@ -201,7 +201,7 @@ export function Picker({ container }: { container: Container }): ReactNode {
 	const picker = usePincerStore((s) => s.picker);
 	const closePicker = usePincerStore((s) => s.closePicker);
 	const harnessMap = usePincerStore((s) => s.harnessMap);
-	const cfg = useCfg();
+	const cfg = useActiveCfg();
 	const info = harnessInfo(harnessMap, cfg.harnessId);
 
 	return (

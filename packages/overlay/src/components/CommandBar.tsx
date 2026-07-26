@@ -6,11 +6,11 @@ import {
 	modelEfforts,
 	modelLabel,
 } from "@/lib/harness";
-import { useCfg, usePincerStore } from "@/state/store";
+import { useActiveCfg, usePincerStore } from "@/state/store";
 import { Avatar } from "./Avatar";
 
 export function CommandBar(): ReactNode {
-	const cfg = useCfg();
+	const cfg = useActiveCfg();
 	const harnessMap = usePincerStore((s) => s.harnessMap);
 	const openPicker = usePincerStore((s) => s.openPicker);
 	const info = harnessInfo(harnessMap, cfg.harnessId);

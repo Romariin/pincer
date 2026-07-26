@@ -14,8 +14,8 @@ import {
 import type { ReactNode } from "react";
 import { useOverlayContainer } from "@/context/overlay";
 import { effortLabel, harnessInfo, modelLabel } from "@/lib/harness";
-import type { Msg } from "@/state/store";
 import { usePincerStore } from "@/state/store";
+import type { Msg } from "@/state/thread";
 import { Avatar } from "./Avatar";
 import { Diff } from "./blocks/Diff";
 import { Markdown } from "./blocks/Markdown";

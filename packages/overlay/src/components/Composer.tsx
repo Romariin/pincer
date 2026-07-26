@@ -6,14 +6,15 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { selectVisibleTurnState, usePincerStore } from "@/state/store";
+import { visibleTurnState } from "@/state/selectors";
+import { usePincerStore } from "@/state/store";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 
 export function Composer(): ReactNode {
 	const view = usePincerStore((state) => state.view);
 	const connected = usePincerStore((state) => state.connected);
-	const turnState = usePincerStore(selectVisibleTurnState);
+	const turnState = usePincerStore(visibleTurnState);
 	const creationPending = usePincerStore(
 		(state) => state.pendingPrompt !== null,
 	);
@@ -43,7 +44,7 @@ export function Composer(): ReactNode {
 		if (
 			!state.connected ||
 			state.pendingPrompt !== null ||
-			selectVisibleTurnState(state) !== "idle"
+			visibleTurnState(state) !== "idle"
 		)
 			return;
 		const trimmed = text.trim();
@@ -75,7 +76,7 @@ export function Composer(): ReactNode {
 			awaitingConversation.current = true;
 			return;
 		}
-		if (!creatingConversation && selectVisibleTurnState(next) !== "idle") {
+		if (!creatingConversation && visibleTurnState(next) !== "idle") {
 			setText("");
 			next.clearSelections();
 		}
@@ -86,7 +87,7 @@ export function Composer(): ReactNode {
 		if (
 			state.view === "chat" &&
 			state.conversationId &&
-			selectVisibleTurnState(state) !== "idle"
+			visibleTurnState(state) !== "idle"
 		) {
 			state.cancelVisibleTurn();
 		} else {
