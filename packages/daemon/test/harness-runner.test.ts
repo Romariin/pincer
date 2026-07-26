@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HarnessEvent } from "@pincer/core";
 import { resolveHarnesses } from "../src/harnesses/registry";
-import { HarnessRunner } from "../src/harnesses/runner";
+import { HarnessRunner } from "../src/harnesses/runner/harnessRunner";
 import type {
 	HarnessDefinition,
 	HarnessRunOutcome,

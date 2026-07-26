@@ -7,7 +7,7 @@ import { claudeHarness } from "../src/harnesses/claude";
 import { codexHarness } from "../src/harnesses/codex";
 import { ompHarness } from "../src/harnesses/omp";
 import { resolveHarnesses } from "../src/harnesses/registry";
-import { HarnessRunner } from "../src/harnesses/runner";
+import { HarnessRunner } from "../src/harnesses/runner/harnessRunner";
 import type {
 	HarnessDefinition,
 	HarnessTurnRequest,

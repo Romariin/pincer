@@ -12,7 +12,7 @@ import {
 } from "@pincer/core";
 import { GitDiffCollector } from "./diffCollector";
 import type { Git } from "./git";
-import { HarnessRunner } from "./harnesses/runner";
+import { HarnessRunner } from "./harnesses/runner/harnessRunner";
 import type { InstalledHarness } from "./harnesses/types";
 import type { ConversationRow, Store, TurnRow } from "./store";
 import type { TurnExecutionControls, TurnSubmission } from "./turnScheduler";
