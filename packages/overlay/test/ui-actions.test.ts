@@ -208,12 +208,12 @@ describe("element selections", () => {
 		const node = element("button");
 
 		store().toggleSelect(node);
-		expect(store().selections.map((selection) => selection.domEl)).toEqual([
-			node,
-		]);
+		expect(
+			store().selections.map((selection) => selection.domEl === node),
+		).toEqual([true]);
 
 		store().toggleSelect(node);
-		expect(store().selections).toEqual([]);
+		expect(store().selections).toHaveLength(0);
 	});
 
 	test("each selection captures its source and DOM context", () => {
@@ -233,12 +233,12 @@ describe("element selections", () => {
 		store().toggleSelect(second);
 
 		store().removeSelection(first);
-		expect(store().selections.map((selection) => selection.domEl)).toEqual([
-			second,
-		]);
+		expect(
+			store().selections.map((selection) => selection.domEl === second),
+		).toEqual([true]);
 
 		store().clearSelections();
-		expect(store().selections).toEqual([]);
+		expect(store().selections).toHaveLength(0);
 	});
 });
 
