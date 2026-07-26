@@ -9,7 +9,7 @@ import {
 	staticOverlaySource,
 } from "./overlaySource";
 import { stopProcessTree } from "./processTree";
-import { type RunningDaemon, startDaemon } from "./server";
+import { type RunningDaemon, startDaemon } from "./server/daemon";
 
 /**
  * `pincer -- <cmd>`: wraps the app's own dev server behind an injection
