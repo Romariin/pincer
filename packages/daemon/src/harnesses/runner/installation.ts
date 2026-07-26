@@ -1,5 +1,4 @@
 import type { HarnessCatalogState, HarnessModel } from "@pincer/core";
-import { stopProcessTree } from "../../processTree";
 import { normalizeModels } from "../adapter";
 import type {
 	HarnessDefinition,
@@ -9,9 +8,10 @@ import type {
 } from "../types";
 import {
 	CATALOG_TIMEOUT_MS,
-	isClosedPipe,
 	PROBE_TIMEOUT_MS,
 	throwIfAborted,
+	withDeadline,
+	writeStdin,
 } from "./spawn";
 import { MAX_CATALOG_CHARS, readTextTail } from "./streams";
 
@@ -32,49 +32,24 @@ async function captureCatalogOutput(
 		stderr: "ignore",
 		detached: process.platform !== "win32",
 	});
-	let timedOut = false;
-	let cancellation: Promise<void> | null = null;
-	const stop = (): void => {
-		cancellation ??= stopProcessTree(proc);
-	};
-	const timeout = setTimeout(() => {
-		timedOut = true;
-		stop();
-	}, CATALOG_TIMEOUT_MS);
-	const abort = (): void => stop();
-	context.signal?.addEventListener("abort", abort, { once: true });
-	try {
-		throwIfAborted(context.signal);
-		const input = (async (): Promise<void> => {
-			if (invocation.stdin === undefined || !proc.stdin) return;
-			try {
-				await proc.stdin.write(invocation.stdin);
-				await proc.stdin.end();
-			} catch (error) {
-				if (!isClosedPipe(error)) throw error;
-			}
-		})();
-		const exit = proc.exited.then(async (exitCode) => {
-			cancellation ??= stopProcessTree(proc);
-			await cancellation;
-			return exitCode;
-		});
-		const [exitCode, stdout] = await Promise.all([
-			exit,
-			readTextTail(proc.stdout, MAX_CATALOG_CHARS),
-			input,
-		]);
-		if (cancellation) await cancellation;
-		throwIfAborted(context.signal);
-		if (timedOut) throw new Error("Harness catalog command timed out");
-		if (exitCode !== 0) throw new Error("Harness catalog command failed");
-		return stdout;
-	} finally {
-		clearTimeout(timeout);
-		context.signal?.removeEventListener("abort", abort);
-		cancellation ??= stopProcessTree(proc);
-		await cancellation;
-	}
+	return await withDeadline(
+		proc,
+		CATALOG_TIMEOUT_MS,
+		context.signal,
+		async (deadline) => {
+			throwIfAborted(context.signal);
+			const [exitCode, stdout] = await Promise.all([
+				deadline.awaitExit(),
+				readTextTail(proc.stdout, MAX_CATALOG_CHARS),
+				writeStdin(proc.stdin, invocation.stdin),
+			]);
+			throwIfAborted(context.signal);
+			if (deadline.exceeded)
+				throw new Error("Harness catalog command timed out");
+			if (exitCode !== 0) throw new Error("Harness catalog command failed");
+			return stdout;
+		},
+	);
 }
 
 export async function detectHarness(
@@ -95,28 +70,16 @@ export async function detectHarness(
 			stderr: "ignore",
 			detached: process.platform !== "win32",
 		});
-		let timedOut = false;
-		let cancellation: Promise<void> | null = null;
-		const stop = (): void => {
-			cancellation ??= stopProcessTree(proc);
-		};
-		const timeout = setTimeout(() => {
-			timedOut = true;
-			stop();
-		}, PROBE_TIMEOUT_MS);
-		const abort = (): void => stop();
-		context.signal?.addEventListener("abort", abort, { once: true });
-		try {
-			const exitCode = await proc.exited;
-			if (cancellation) await cancellation;
-			throwIfAborted(context.signal);
-			return !timedOut && exitCode === 0;
-		} finally {
-			clearTimeout(timeout);
-			context.signal?.removeEventListener("abort", abort);
-			cancellation ??= stopProcessTree(proc);
-			await cancellation;
-		}
+		return await withDeadline(
+			proc,
+			PROBE_TIMEOUT_MS,
+			context.signal,
+			async (deadline) => {
+				const exitCode = await deadline.awaitExit();
+				throwIfAborted(context.signal);
+				return !deadline.exceeded && exitCode === 0;
+			},
+		);
 	} catch (error) {
 		if (context.signal?.aborted) throw error;
 		return false;

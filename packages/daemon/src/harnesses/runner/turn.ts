@@ -8,7 +8,7 @@ import type {
 	RunningHarnessTurn,
 } from "../types";
 import { createRecordReader } from "./records";
-import { isClosedPipe } from "./spawn";
+import { writeStdin } from "./spawn";
 import {
 	MAX_NDJSON_RECORD_BYTES,
 	MAX_STDERR_CHARS,
@@ -65,15 +65,7 @@ export function runHarnessTurn(
 					`Harness NDJSON record exceeded ${MAX_NDJSON_RECORD_BYTES} bytes`,
 				),
 			);
-			const inputTask = (async (): Promise<void> => {
-				if (invocation.stdin === undefined || !proc.stdin) return;
-				try {
-					await proc.stdin.write(invocation.stdin);
-					await proc.stdin.end();
-				} catch (error) {
-					if (!isClosedPipe(error)) throw error;
-				}
-			})();
+			const inputTask = writeStdin(proc.stdin, invocation.stdin);
 			const exitTask = proc.exited.then(async (exitCode) => {
 				cancellation ??= stopProcessTree(proc);
 				await cancellation;
