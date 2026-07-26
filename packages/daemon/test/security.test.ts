@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { isLocalOrigin } from "../src/server";
+import { isLocalOrigin } from "../src/localOrigin";
 import { createHarness, type Harness } from "./harness";
 
 let h: Harness | undefined;

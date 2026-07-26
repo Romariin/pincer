@@ -1,5 +1,6 @@
 import { CONTRACT_A_VERSION } from "@pincer/core";
 import type { Server, ServerWebSocket, Subprocess } from "bun";
+import { isLocalOrigin } from "./localOrigin";
 import {
 	type OverlayBuildWatcher,
 	type OverlaySource,
@@ -8,7 +9,7 @@ import {
 	staticOverlaySource,
 } from "./overlaySource";
 import { stopProcessTree } from "./processTree";
-import { isLocalOrigin, type RunningDaemon, startDaemon } from "./server";
+import { type RunningDaemon, startDaemon } from "./server";
 
 /**
  * `pincer -- <cmd>`: wraps the app's own dev server behind an injection
