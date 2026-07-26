@@ -1,14 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import type { Server } from "bun";
+import { formatReadyBanner, printReadyBanner } from "../src/dev/banner";
+import { findLocalUrl } from "../src/dev/devServer";
+import { createOutputGate } from "../src/dev/outputGate";
 import {
-	createOutputGate,
-	findLocalUrl,
-	formatReadyBanner,
-	injectHtml,
-	printReadyBanner,
+	injectPincerTags,
 	type RunningProxy,
 	startDevProxy,
-} from "../src/dev";
+} from "../src/dev/proxy";
 import { staticOverlaySource } from "../src/overlaySource";
 
 let upstream: Server<{ dummy?: true }> | undefined;
@@ -175,8 +174,8 @@ test("returns 502 when the upstream is down", async () => {
 	expect(res.status).toBe(502);
 });
 
-test("injectHtml escapes </script> sequences in config values", () => {
-	const out = injectHtml("<html><head></head><body></body></html>", {
+test("injectPincerTags escapes </script> sequences in config values", () => {
+	const out = injectPincerTags("<html><head></head><body></body></html>", {
 		projectRoot: "/tmp/</script><script>alert(1)",
 	});
 	expect(out).not.toContain("</script><script>alert(1)");

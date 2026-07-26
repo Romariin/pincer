@@ -243,7 +243,7 @@ try {
 		}
 		// Proxy mode owns the generated overlay asset. Loading it here keeps the
 		// daemon-only CLI independent of the overlay watcher's rebuild window.
-		const { runDev } = await import("./dev");
+		const { runDev } = await import("./dev/runDev");
 		await runDev({
 			projectRoot,
 			daemonPort: port,
