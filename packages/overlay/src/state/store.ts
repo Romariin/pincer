@@ -30,6 +30,7 @@ import {
 	type Msg,
 	mergeLiveTurn,
 	replaceConversation,
+	streamIntoThread,
 	updateConversationTurnState,
 	upsertConversation,
 	userMsg,
@@ -171,49 +172,38 @@ export function computeCfg(s: PincerStore): Cfg {
 }
 
 export const usePincerStore = create<PincerStore>()((set, get) => {
+	const stream = (
+		conversationId: string,
+		turnId: number,
+		apply: (blocks: MessageBlock[]) => MessageBlock[],
+	): void => {
+		set((state) => {
+			const conversation = state.conversations.find(
+				(item) => item.id === conversationId,
+			);
+			const next = streamIntoThread(
+				state.threads[conversationId] ?? emptyThread(),
+				turnId,
+				conversation ? conversationCfg(conversation) : undefined,
+				apply,
+			);
+			if (!next) return state;
+			return { threads: { ...state.threads, [conversationId]: next } };
+		});
+	};
+
 	const appendText = (
 		conversationId: string,
 		turnId: number,
 		delta: string,
 	): void => {
-		set((state) => {
-			const current = state.threads[conversationId] ?? emptyThread();
-			if (current.turnState !== "running" || current.turnId !== turnId)
-				return state;
-
-			let streamingIndex = current.streamingIndex;
-			let messages = current.messages;
-			if (streamingIndex === null) {
-				const conversation = state.conversations.find(
-					(item) => item.id === conversationId,
-				);
-				const meta = conversation ? conversationCfg(conversation) : undefined;
-				streamingIndex = messages.length;
-				messages = [...messages, assistantMsg([], meta)];
-			}
-			messages = messages.map((message, index) => {
-				if (index !== streamingIndex) return message;
-				const blocks = [...message.blocks];
-				const last = blocks[blocks.length - 1];
-				if (last?.t === "md")
-					blocks[blocks.length - 1] = { t: "md", text: last.text + delta };
-				else blocks.push({ t: "md", text: delta });
-				return { ...message, blocks };
-			});
-
-			return {
-				threads: {
-					...state.threads,
-					[conversationId]: {
-						...current,
-						messages,
-						streamingIndex,
-						turnState: "running",
-						queuePosition: null,
-						turnId,
-					},
-				},
-			};
+		stream(conversationId, turnId, (blocks) => {
+			const next = [...blocks];
+			const last = next[next.length - 1];
+			if (last?.t === "md")
+				next[next.length - 1] = { t: "md", text: last.text + delta };
+			else next.push({ t: "md", text: delta });
+			return next;
 		});
 	};
 
@@ -222,41 +212,7 @@ export const usePincerStore = create<PincerStore>()((set, get) => {
 		turnId: number,
 		block: MessageBlock,
 	): void => {
-		set((state) => {
-			const current = state.threads[conversationId] ?? emptyThread();
-			if (current.turnState !== "running" || current.turnId !== turnId)
-				return state;
-
-			let streamingIndex = current.streamingIndex;
-			let messages = current.messages;
-			if (streamingIndex === null) {
-				const conversation = state.conversations.find(
-					(item) => item.id === conversationId,
-				);
-				const meta = conversation ? conversationCfg(conversation) : undefined;
-				streamingIndex = messages.length;
-				messages = [...messages, assistantMsg([], meta)];
-			}
-			messages = messages.map((message, index) =>
-				index === streamingIndex
-					? { ...message, blocks: [...message.blocks, block] }
-					: message,
-			);
-
-			return {
-				threads: {
-					...state.threads,
-					[conversationId]: {
-						...current,
-						messages,
-						streamingIndex,
-						turnState: "running",
-						queuePosition: null,
-						turnId,
-					},
-				},
-			};
-		});
+		stream(conversationId, turnId, (blocks) => [...blocks, block]);
 	};
 
 	const noteConversation = (conversationId: string, text: string): void => {

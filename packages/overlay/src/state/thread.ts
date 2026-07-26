@@ -154,6 +154,42 @@ export function mergeLiveTurn(
 	};
 }
 
+/**
+ * Appends to the streaming assistant message of a running turn, opening one if
+ * the turn has not produced any output yet. Returns null when the delta belongs
+ * to a turn that is no longer the thread's — a late frame from a cancelled or
+ * superseded turn must not resurrect it.
+ */
+export function streamIntoThread(
+	thread: ConversationThread,
+	turnId: number,
+	meta: Cfg | undefined,
+	apply: (blocks: MessageBlock[]) => MessageBlock[],
+): ConversationThread | null {
+	if (thread.turnState !== "running" || thread.turnId !== turnId) return null;
+
+	let streamingIndex = thread.streamingIndex;
+	let messages = thread.messages;
+	if (streamingIndex === null) {
+		streamingIndex = messages.length;
+		messages = [...messages, assistantMsg([], meta)];
+	}
+	messages = messages.map((message, index) =>
+		index === streamingIndex
+			? { ...message, blocks: apply(message.blocks) }
+			: message,
+	);
+
+	return {
+		...thread,
+		messages,
+		streamingIndex,
+		turnState: "running",
+		queuePosition: null,
+		turnId,
+	};
+}
+
 export function finishThread(thread: ConversationThread): ConversationThread {
 	const index = thread.streamingIndex;
 	let messages = thread.messages;
