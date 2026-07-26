@@ -1,12 +1,12 @@
-import type { ReactNode } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { usePincerStore, useCfg } from "@/state/store";
+import type { ReactNode } from "react";
 import {
 	effortLabel,
 	harnessInfo,
 	modelEfforts,
 	modelLabel,
 } from "@/lib/harness";
+import { useCfg, usePincerStore } from "@/state/store";
 import { Avatar } from "./Avatar";
 
 export function CommandBar(): ReactNode {

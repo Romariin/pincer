@@ -1,11 +1,10 @@
 import type { Database } from "bun:sqlite";
-import type { ConversationStatus, ConversationSummary, TurnStatus } from "@pincer/core";
 import type {
-	ConversationRow,
-	NewTurnRow,
-	TurnPatch,
-	TurnRow,
-} from "./types";
+	ConversationStatus,
+	ConversationSummary,
+	TurnStatus,
+} from "@pincer/core";
+import type { ConversationRow, NewTurnRow, TurnPatch, TurnRow } from "./types";
 
 export class ConversationRepository {
 	constructor(private readonly db: Database) {}
@@ -59,7 +58,9 @@ export class ConversationRepository {
 	delete(id: string): void {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
-			this.db.query("DELETE FROM conversations WHERE id = $id").run({ $id: id });
+			this.db
+				.query("DELETE FROM conversations WHERE id = $id")
+				.run({ $id: id });
 			this.db.exec("COMMIT");
 		} catch (error) {
 			this.db.exec("ROLLBACK");

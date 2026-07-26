@@ -66,7 +66,11 @@ export class LiveTurnBuffer {
 				detail: event.detail,
 			});
 		} else {
-			this.live.blocks.push({ t: "diff", file: event.file, hunks: event.hunks });
+			this.live.blocks.push({
+				t: "diff",
+				file: event.file,
+				hunks: event.hunks,
+			});
 		}
 		return event;
 	}

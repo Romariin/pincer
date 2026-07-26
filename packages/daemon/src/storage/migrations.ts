@@ -14,7 +14,9 @@ interface TableColumn {
 function tableExists(db: Database, table: string): boolean {
 	return Boolean(
 		db
-			.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name")
+			.query(
+				"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name",
+			)
 			.get({ $name: table }),
 	);
 }
@@ -44,7 +46,9 @@ function hasCurrentConstraints(db: Database): boolean {
 		name: string;
 	}[];
 	const turnTable = db
-		.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'")
+		.query(
+			"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turns'",
+		)
 		.get() as { sql: string } | null;
 	const conversationTable = db
 		.query(
@@ -62,7 +66,9 @@ function hasCurrentConstraints(db: Database): boolean {
 			const columns = db.query(`PRAGMA index_info(${index.name})`).all() as {
 				name: string;
 			}[];
-			return columns.map((item) => item.name).join(",") === "conversation_id,seq";
+			return (
+				columns.map((item) => item.name).join(",") === "conversation_id,seq"
+			);
 		})
 	);
 }

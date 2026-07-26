@@ -1,5 +1,5 @@
-import { useId, useMemo, type CSSProperties, type ReactNode } from "react";
 import type { HarnessDisplay } from "@pincer/core";
+import { type CSSProperties, type ReactNode, useId, useMemo } from "react";
 import { MONO } from "@/lib/constants";
 
 /** Resize the harness's raw SVG icon and uniquify its gradient ids so multiple avatars never collide. */

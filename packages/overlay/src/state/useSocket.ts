@@ -1,5 +1,5 @@
+import { type ClientMessage, parseServerMessage } from "@pincer/core";
 import { useEffect } from "react";
-import { parseServerMessage, type ClientMessage } from "@pincer/core";
 import { usePincerStore } from "./store";
 import { PincerClient } from "./transport";
 

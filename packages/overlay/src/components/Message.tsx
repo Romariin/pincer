@@ -1,21 +1,4 @@
-import type { ReactNode } from "react";
 import type { MessageBlock } from "@pincer/core";
-import { usePincerStore } from "@/state/store";
-import type { Msg } from "@/state/store";
-import { effortLabel, harnessInfo, modelLabel } from "@/lib/harness";
-import { useOverlayContainer } from "@/context/overlay";
-import { Avatar } from "./Avatar";
-import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
-import { Badge } from "./ui/badge";
-import {
-	Message as MessageRoot,
-	MessageAvatar,
-	MessageContent,
-} from "./ui/message";
-import { Bubble, BubbleContent } from "./ui/bubble";
-import { Marker, MarkerContent, MarkerIcon } from "./ui/marker";
-import { Markdown } from "./blocks/Markdown";
-import { Diff } from "./blocks/Diff";
 import {
 	FilePlusIcon,
 	FileTextIcon,
@@ -28,6 +11,23 @@ import {
 	TerminalIcon,
 	WrenchIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
+import { useOverlayContainer } from "@/context/overlay";
+import { effortLabel, harnessInfo, modelLabel } from "@/lib/harness";
+import type { Msg } from "@/state/store";
+import { usePincerStore } from "@/state/store";
+import { Avatar } from "./Avatar";
+import { Diff } from "./blocks/Diff";
+import { Markdown } from "./blocks/Markdown";
+import { Badge } from "./ui/badge";
+import { Bubble, BubbleContent } from "./ui/bubble";
+import { Marker, MarkerContent, MarkerIcon } from "./ui/marker";
+import {
+	MessageAvatar,
+	MessageContent,
+	Message as MessageRoot,
+} from "./ui/message";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /** Pick a glyph that reflects what the tool did (read/edit/run/…), matching the harness's own vocabulary. */
 function toolIcon(name: string): ReactNode {

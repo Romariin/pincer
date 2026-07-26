@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { MIN_HOST_VISIBLE, PANEL_MAX_W, PANEL_MIN_W, PANEL_W } from "../src/lib/constants";
+import {
+	MIN_HOST_VISIBLE,
+	PANEL_MAX_W,
+	PANEL_MIN_W,
+	PANEL_W,
+} from "../src/lib/constants";
 import { clampPanelWidth, fitPanelWidth } from "../src/lib/panelWidth";
 
 describe("clampPanelWidth", () => {

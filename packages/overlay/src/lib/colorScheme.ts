@@ -4,15 +4,15 @@
  * Tailwind's `dark:` variant (`@custom-variant dark (&:is(.dark *))`).
  */
 export function followSystemScheme(node: HTMLElement): () => void {
-  const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+	const media = window.matchMedia?.("(prefers-color-scheme: dark)");
 
-  const apply = (): void => {
-    const dark = media?.matches !== false;
-    node.classList.toggle("dark", dark);
-    node.classList.toggle("light", !dark);
-  };
+	const apply = (): void => {
+		const dark = media?.matches !== false;
+		node.classList.toggle("dark", dark);
+		node.classList.toggle("light", !dark);
+	};
 
-  apply();
-  media?.addEventListener("change", apply);
-  return () => media?.removeEventListener("change", apply);
+	apply();
+	media?.addEventListener("change", apply);
+	return () => media?.removeEventListener("change", apply);
 }

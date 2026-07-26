@@ -15,7 +15,11 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { buildDomContext, resolveSource } from "@/dom/picker";
 import { harnessInfo } from "@/lib/harness";
-import { clampPanelWidth, loadPanelWidth, savePanelWidth } from "@/lib/panelWidth";
+import {
+	clampPanelWidth,
+	loadPanelWidth,
+	savePanelWidth,
+} from "@/lib/panelWidth";
 import {
 	assistantMsg,
 	type Cfg,

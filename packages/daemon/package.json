@@ -1,15 +1,15 @@
 {
-  "name": "@pincer/daemon",
-  "version": "0.1.0",
-  "type": "module",
-  "bin": {
-    "pincer": "./src/cli.ts"
-  },
-  "dependencies": {
-    "@pincer/core": "workspace:*",
-    "@pincer/overlay": "workspace:*"
-  },
-  "scripts": {
-    "build": "bun build ./src/cli.ts --compile --outfile ../../dist/pincer"
-  }
+	"name": "@pincer/daemon",
+	"version": "0.1.0",
+	"type": "module",
+	"bin": {
+		"pincer": "./src/cli.ts"
+	},
+	"dependencies": {
+		"@pincer/core": "workspace:*",
+		"@pincer/overlay": "workspace:*"
+	},
+	"scripts": {
+		"build": "bun build ./src/cli.ts --compile --outfile ../../dist/pincer"
+	}
 }

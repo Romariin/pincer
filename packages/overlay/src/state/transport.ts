@@ -1,9 +1,9 @@
-import { PROTOCOL_VERSION } from "@pincer/core";
 import type {
 	ClientMessage,
 	ConversationConfig,
 	KeyboardShortcut,
 } from "@pincer/core";
+import { PROTOCOL_VERSION } from "@pincer/core";
 
 export type SendFrame = (message: ClientMessage) => void;
 
@@ -15,26 +15,51 @@ export class PincerClient {
 	}
 
 	newConversation(config: ConversationConfig): void {
-		this.sendFrame({ v: PROTOCOL_VERSION, type: "new_conversation", ...config });
+		this.sendFrame({
+			v: PROTOCOL_VERSION,
+			type: "new_conversation",
+			...config,
+		});
 	}
 
 	resumeConversation(conversationId: string): void {
-		this.sendFrame({ v: PROTOCOL_VERSION, type: "resume_conversation", conversationId });
+		this.sendFrame({
+			v: PROTOCOL_VERSION,
+			type: "resume_conversation",
+			conversationId,
+		});
 	}
 
 	setConfig(conversationId: string, config: ConversationConfig): void {
-		this.sendFrame({ v: PROTOCOL_VERSION, type: "set_config", conversationId, ...config });
+		this.sendFrame({
+			v: PROTOCOL_VERSION,
+			type: "set_config",
+			conversationId,
+			...config,
+		});
 	}
 
 	deleteConversation(conversationId: string): void {
-		this.sendFrame({ v: PROTOCOL_VERSION, type: "delete_conversation", conversationId });
+		this.sendFrame({
+			v: PROTOCOL_VERSION,
+			type: "delete_conversation",
+			conversationId,
+		});
 	}
 
 	prompt(
 		conversationId: string,
-		payload: Omit<Extract<ClientMessage, { type: "prompt" }>, "v" | "type" | "conversationId">,
+		payload: Omit<
+			Extract<ClientMessage, { type: "prompt" }>,
+			"v" | "type" | "conversationId"
+		>,
 	): void {
-		this.sendFrame({ v: PROTOCOL_VERSION, type: "prompt", conversationId, ...payload });
+		this.sendFrame({
+			v: PROTOCOL_VERSION,
+			type: "prompt",
+			conversationId,
+			...payload,
+		});
 	}
 
 	getOverlaySettings(appRoot: string, appOrigin: string): void {
@@ -46,7 +71,11 @@ export class PincerClient {
 		});
 	}
 
-	updateShortcut(appRoot: string, appOrigin: string, shortcut: KeyboardShortcut): void {
+	updateShortcut(
+		appRoot: string,
+		appOrigin: string,
+		shortcut: KeyboardShortcut,
+	): void {
 		this.sendFrame({
 			v: PROTOCOL_VERSION,
 			type: "update_overlay_settings",
@@ -56,7 +85,11 @@ export class PincerClient {
 		});
 	}
 
-	updateFloatingButton(appRoot: string, appOrigin: string, showFloatingButton: boolean): void {
+	updateFloatingButton(
+		appRoot: string,
+		appOrigin: string,
+		showFloatingButton: boolean,
+	): void {
 		this.sendFrame({
 			v: PROTOCOL_VERSION,
 			type: "update_overlay_settings",

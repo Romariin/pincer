@@ -1,21 +1,25 @@
 {
-  "name": "pincer-monorepo",
-  "private": true,
-  "type": "module",
-  "workspaces": ["packages/*", "examples/*"],
-  "devDependencies": {
-    "@biomejs/biome": "2.5.4",
-    "@types/node": "^22",
-    "bun-types": "^1.3.0",
-    "typescript": "^5.9.0"
-  },
-  "scripts": {
-    "dev": "bun scripts/dev.ts",
-    "lint": "biome lint .",
-    "lint:fix": "biome lint --write .",
-    "typecheck": "tsc -b",
-    "test": "bun test",
-    "build:overlay": "bun run --cwd packages/overlay build",
-    "build:daemon": "bun run --cwd packages/daemon build"
-  }
+	"name": "pincer-monorepo",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"packages/*",
+		"examples/*"
+	],
+	"devDependencies": {
+		"@biomejs/biome": "2.5.4",
+		"@types/node": "^22",
+		"bun-types": "^1.3.0",
+		"typescript": "^5.9.0"
+	},
+	"scripts": {
+		"dev": "bun scripts/dev.ts",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"typecheck": "tsc -b",
+		"test": "bun test",
+		"build:overlay": "bun run --cwd packages/overlay build",
+		"build:daemon": "bun run --cwd packages/daemon build"
+	}
 }

@@ -14,8 +14,8 @@ import type {
 	ServerMessage,
 	SourceLocation,
 } from "@pincer/core";
-import { startDaemon, type RunningDaemon } from "../src/server";
 import { projectDataDir } from "../src/paths";
+import { type RunningDaemon, startDaemon } from "../src/server";
 
 export interface FakeOmpExecution {
 	session?: string;

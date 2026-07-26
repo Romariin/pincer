@@ -1,5 +1,5 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { PROTOCOL_VERSION } from "@pincer/core";
 import { createHarness, type Harness } from "./harness";

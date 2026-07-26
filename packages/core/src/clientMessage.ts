@@ -37,11 +37,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+function hasOnlyKeys(
+	value: Record<string, unknown>,
+	allowed: string[],
+): boolean {
 	return Object.keys(value).every((key) => allowed.includes(key));
 }
 
-function boundedString(value: unknown, max: number, allowEmpty = false): value is string {
+function boundedString(
+	value: unknown,
+	max: number,
+	allowEmpty = false,
+): value is string {
 	return (
 		typeof value === "string" &&
 		(allowEmpty || value.length > 0) &&
@@ -90,7 +97,11 @@ function parseSource(value: unknown): SourceLocation | null | undefined {
 	) {
 		return undefined;
 	}
-	return { path: value.path, line: Number(value.line), column: Number(value.column) };
+	return {
+		path: value.path,
+		line: Number(value.line),
+		column: Number(value.column),
+	};
 }
 
 function boundedStringArray(
@@ -148,7 +159,10 @@ function parseElements(value: unknown): PromptElement[] | null {
 }
 
 function parseShortcut(value: unknown): KeyboardShortcut | null {
-	if (!isRecord(value) || !hasOnlyKeys(value, ["code", "alt", "ctrl", "shift", "meta"])) {
+	if (
+		!isRecord(value) ||
+		!hasOnlyKeys(value, ["code", "alt", "ctrl", "shift", "meta"])
+	) {
 		return null;
 	}
 	return isKeyboardShortcut(value) ? value : null;
@@ -165,7 +179,16 @@ export function parseClientMessage(raw: unknown): ClientMessageParseResult {
 				? { ok: true, value: { v: PROTOCOL_VERSION, type: raw.type } }
 				: fail("Invalid list_conversations message.");
 		case "new_conversation": {
-			if (!hasOnlyKeys(raw, ["v", "type", "force", "harnessId", "model", "effort"])) {
+			if (
+				!hasOnlyKeys(raw, [
+					"v",
+					"type",
+					"force",
+					"harnessId",
+					"model",
+					"effort",
+				])
+			) {
 				return fail("Invalid new_conversation message.");
 			}
 			if (Object.hasOwn(raw, "force") && typeof raw.force !== "boolean") {
@@ -197,11 +220,22 @@ export function parseClientMessage(raw: unknown): ClientMessageParseResult {
 			}
 			return {
 				ok: true,
-				value: { v: PROTOCOL_VERSION, type: raw.type, conversationId: raw.conversationId },
+				value: {
+					v: PROTOCOL_VERSION,
+					type: raw.type,
+					conversationId: raw.conversationId,
+				},
 			};
 		case "set_config": {
 			if (
-				!hasOnlyKeys(raw, ["v", "type", "conversationId", "harnessId", "model", "effort"]) ||
+				!hasOnlyKeys(raw, [
+					"v",
+					"type",
+					"conversationId",
+					"harnessId",
+					"model",
+					"effort",
+				]) ||
 				!isConversationId(raw.conversationId)
 			) {
 				return fail("Invalid set_config message.");
