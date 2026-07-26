@@ -6,10 +6,7 @@
 		"useIgnoreFile": true
 	},
 	"formatter": {
-		"enabled": true,
-		"indentStyle": "tab",
-		"indentWidth": 2,
-		"lineWidth": 80
+		"enabled": true
 	},
 	"linter": {
 		"enabled": true,
