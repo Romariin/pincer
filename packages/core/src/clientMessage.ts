@@ -8,6 +8,7 @@ import type {
 } from "./protocol";
 import { isKeyboardShortcut } from "./protocol";
 import type { SourceLocation } from "./source";
+import { hasOnlyKeys, isRecord } from "./valueGuards";
 
 const MAX_ID = 128;
 const MAX_CONFIG = 256;
@@ -31,17 +32,6 @@ export type ClientMessageParseResult =
 
 function fail(error: string): ClientMessageParseResult {
 	return { ok: false, error };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(
-	value: Record<string, unknown>,
-	allowed: string[],
-): boolean {
-	return Object.keys(value).every((key) => allowed.includes(key));
 }
 
 function boundedString(
